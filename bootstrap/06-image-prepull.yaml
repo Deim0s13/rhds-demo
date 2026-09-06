@@ -1,0 +1,39 @@
+---
+# Pulls every image the demo needs onto every worker node ahead of time.
+# Not a production pattern, purely a demo reliability device: it converts a
+# four minute cold pull in front of a customer into a background job you ran
+# over coffee.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: devspaces-image-prepull
+  namespace: DEMO_NAMESPACE_PLACEHOLDER
+spec:
+  selector:
+    matchLabels:
+      app: devspaces-image-prepull
+  template:
+    metadata:
+      labels:
+        app: devspaces-image-prepull
+    spec:
+      initContainers:
+        - name: pull-java
+          image: registry.access.redhat.com/ubi9/openjdk-21:latest
+          command: ["/bin/sh", "-c", "echo java image cached"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+        - name: pull-ansible
+          image: ghcr.io/ansible/community-ansible-dev-tools:latest
+          command: ["/bin/sh", "-c", "echo ansible image cached"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+      containers:
+        - name: pause
+          image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+          command: ["/bin/sh", "-c", "sleep infinity"]
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 50m, memory: 64Mi}
+      tolerations:
+        - operator: Exists

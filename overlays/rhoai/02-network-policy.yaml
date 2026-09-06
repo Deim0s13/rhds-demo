@@ -1,0 +1,23 @@
+---
+# Same control as the Ollama path, expressed against the serving pods.
+# Worth showing live: the inference endpoint is reachable from developer
+# workspaces and from nothing else. On a laptop you are trusting policy;
+# here it is configuration you can point at.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-devspaces-to-inference
+  namespace: DEMO_NAMESPACE_PLACEHOLDER
+spec:
+  podSelector:
+    matchLabels:
+      component: predictor
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: che.eclipse.org
+      ports:
+        - protocol: TCP
+          port: 8080

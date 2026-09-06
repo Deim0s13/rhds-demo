@@ -1,0 +1,11 @@
+---
+- name: Assert the baseline has an accountable owner
+  ansible.builtin.assert:
+    that:
+      - demo_baseline_owner is defined
+      - demo_baseline_owner | length > 0
+    fail_msg: "Every baseline needs a named owner before it can be enforced."
+
+- name: Record the baseline decision
+  ansible.builtin.debug:
+    msg: "Baseline owned by {{ demo_baseline_owner }}, enforced: {{ demo_baseline_enforced }}"

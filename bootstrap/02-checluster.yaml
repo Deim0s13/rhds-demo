@@ -1,0 +1,32 @@
+---
+apiVersion: org.eclipse.che/v2
+kind: CheCluster
+metadata:
+  name: devspaces
+  namespace: DEVSPACES_NAMESPACE_PLACEHOLDER
+spec:
+  components:
+    cheServer:
+      debug: false
+      logLevel: INFO
+    metrics:
+      enable: true
+    devfileRegistry:
+      disableInternalRegistry: false
+      externalDevfileRegistries: []
+  devEnvironments:
+    # Cost control levers. Call these out live: this is the answer to
+    # "what stops 400 developers leaving workspaces running over the weekend".
+    secondsOfInactivityBeforeIdling: 1800
+    secondsOfRunTimeoutBeforeIdling: 14400
+    startTimeoutSeconds: 600
+    maxNumberOfWorkspacesPerUser: 5
+    maxNumberOfRunningWorkspacesPerUser: 2
+    defaultNamespace:
+      autoProvision: true
+      template: <username>-devspaces
+    storage:
+      pvcStrategy: per-user
+    defaultEditor: che-incubator/che-code/latest
+    disableContainerBuildCapabilities: false
+  networking: {}

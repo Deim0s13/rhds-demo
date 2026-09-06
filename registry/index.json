@@ -1,0 +1,50 @@
+[
+  {
+    "name": "spring-boot-payments",
+    "displayName": "Spring Boot Payments Service",
+    "description": "Approved Spring Boot 3 / Java 21 stack. Built on a scanned UBI image with the corporate Maven proxy preconfigured.",
+    "type": "sample",
+    "tags": ["Java", "Spring Boot", "Maven", "Approved"],
+    "icon": "https://raw.githubusercontent.com/devfile-samples/devfile-stack-icons/main/spring.svg",
+    "projectType": "springboot",
+    "language": "java",
+    "provider": "Platform Engineering",
+    "git": {
+      "remotes": {
+        "origin": "https://github.com/GIT_ORG_PLACEHOLDER/GIT_REPO_PLACEHOLDER.git"
+      }
+    },
+    "versions": [
+      {
+        "version": "1.0.0",
+        "default": true,
+        "schemaVersion": "2.2.0",
+        "description": "Initial approved release"
+      }
+    ]
+  },
+  {
+    "name": "ansible-automation-workspace",
+    "displayName": "Ansible Automation Workspace",
+    "description": "Approved Ansible authoring stack with ansible-lint, ansible-navigator and molecule. Content is linted before it can be committed.",
+    "type": "sample",
+    "tags": ["Ansible", "Automation", "Platform", "Approved"],
+    "icon": "https://raw.githubusercontent.com/devfile-samples/devfile-stack-icons/main/ansible.svg",
+    "projectType": "ansible",
+    "language": "ansible",
+    "provider": "Platform Engineering",
+    "git": {
+      "remotes": {
+        "origin": "https://github.com/GIT_ORG_PLACEHOLDER/GIT_REPO_PLACEHOLDER.git"
+      }
+    },
+    "versions": [
+      {
+        "version": "1.0.0",
+        "default": true,
+        "schemaVersion": "2.2.0",
+        "description": "Initial approved release"
+      }
+    ]
+  }
+]

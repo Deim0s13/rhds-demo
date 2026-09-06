@@ -1,0 +1,99 @@
+schemaVersion: 2.2.0
+metadata:
+  name: spring-boot-payments
+  displayName: Spring Boot Payments Service
+  description: Sample Spring Boot service used to demonstrate the Dev Spaces inner loop
+  language: Java
+  projectType: springboot
+  tags:
+    - Java
+    - Spring Boot
+    - Maven
+
+# The project is cloned automatically when the workspace starts. This is why the
+# developer goes from URL to running code without a single local prerequisite.
+projects:
+  - name: spring-boot-payments
+    git:
+      remotes:
+        origin: "https://github.com/GIT_ORG_PLACEHOLDER/GIT_REPO_PLACEHOLDER.git"
+      checkoutFrom:
+        revision: GIT_BRANCH_PLACEHOLDER
+    subDir: samples/spring-boot-app
+
+components:
+  - name: tools
+    container:
+      # Red Hat Universal Developer Image. In a bank this is replaced by an
+      # internally built, scanned image with the corporate CA bundle baked in.
+      image: registry.access.redhat.com/ubi9/openjdk-21:latest
+      memoryRequest: 1Gi
+      memoryLimit: 4Gi
+      cpuRequest: 500m
+      cpuLimit: 2000m
+      mountSources: true
+      env:
+        - name: MAVEN_OPTS
+          value: "-Xmx2048m"
+        # Points the in-IDE assistant at the in-cluster model. Nothing leaves
+        # the cluster; this is the version of AI assistance a regulated shop
+        # can actually approve.
+        # Rendered by scripts/render-devfiles.sh from demo.env, then committed.
+        # Dev Spaces fetches this file directly from Git, so it cannot contain
+        # placeholders the way the bootstrap manifests do.
+        - name: AI_BASE_URL
+          value: "http://coder-model-predictor.devspaces-demo.svc.cluster.local:8080/v1"
+        - name: AI_MODEL
+          value: "qwen2.5-coder-7b-instruct"
+        # The assistant needs a key field even when the endpoint does not check
+        # one. Never put a real credential in a devfile; inject it as a secret.
+        - name: AI_API_KEY
+          value: "not-required-in-cluster"
+      endpoints:
+        - name: http-springboot
+          targetPort: 8080
+          exposure: public
+          protocol: https
+        - name: debug
+          targetPort: 5005
+          exposure: none
+      volumeMounts:
+        - name: m2
+          path: /home/user/.m2
+  - name: m2
+    volume:
+      size: 3Gi
+
+commands:
+  - id: build
+    exec:
+      component: tools
+      commandLine: "mvn -B clean package -DskipTests"
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: build
+        isDefault: true
+  - id: run
+    exec:
+      component: tools
+      commandLine: "mvn -B spring-boot:run"
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: run
+        isDefault: true
+  - id: test
+    exec:
+      component: tools
+      commandLine: "mvn -B test"
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: test
+        isDefault: true
+  - id: debug
+    exec:
+      component: tools
+      commandLine: "mvn -B spring-boot:run -Dspring-boot.run.jvmArguments='-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005'"
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: debug
+        isDefault: true

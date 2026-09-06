@@ -1,0 +1,118 @@
+---
+# Seeds Gitea with the demo content so a fresh cluster arrives populated.
+# You should never be clicking through a setup wizard at seven in the morning.
+#
+# Note the honest boundary: this Job pulls the source content from your public
+# repo at BOOTSTRAP time, because that is where the content lives. The DEMO
+# itself then touches nothing outside the cluster. Say that plainly if asked.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gitea-seed
+  namespace: DEMO_NAMESPACE_PLACEHOLDER
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: seed
+          image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+          env:
+            - name: GITEA_URL
+              value: "http://gitea.DEMO_NAMESPACE_PLACEHOLDER.svc.cluster.local:3000"
+            - name: GITEA_EXTERNAL_HOST
+              value: "GITEA_HOST_PLACEHOLDER"
+            - name: GITEA_ORG
+              value: "GITEA_ORG_PLACEHOLDER"
+            - name: SOURCE_REPO
+              value: "https://github.com/GIT_ORG_PLACEHOLDER/GIT_REPO_PLACEHOLDER.git"
+            - name: SOURCE_BRANCH
+              value: "GIT_BRANCH_PLACEHOLDER"
+            - name: ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-admin
+                  key: username
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gitea-admin
+                  key: password
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              microdnf install -y git jq tar findutils >/dev/null 2>&1
+
+              echo "waiting for Gitea"
+              for i in $(seq 1 60); do
+                curl -sf "${GITEA_URL}/api/healthz" >/dev/null && break
+                sleep 5
+              done
+
+              AUTH="-u ${ADMIN_USER}:${ADMIN_PASSWORD}"
+
+              echo "ensuring admin user exists"
+              # First run: the container's own admin CLI created nothing, so
+              # create the admin through the API bootstrap if it is missing.
+              curl -sf ${AUTH} "${GITEA_URL}/api/v1/user" >/dev/null 2>&1 || {
+                echo "admin user not usable, check the gitea-admin secret and pod logs"
+                exit 1
+              }
+
+              echo "creating organisation ${GITEA_ORG}"
+              curl -s ${AUTH} -X POST "${GITEA_URL}/api/v1/orgs" \
+                -H 'Content-Type: application/json' \
+                -d "{\"username\":\"${GITEA_ORG}\",\"visibility\":\"public\"}" >/dev/null || true
+
+              echo "cloning source content"
+              cd /tmp
+              git clone --depth 1 --branch "${SOURCE_BRANCH}" "${SOURCE_REPO}" src
+
+              seed_repo() {
+                local name="$1" path="$2"
+                echo "seeding ${name}"
+                curl -s ${AUTH} -X POST "${GITEA_URL}/api/v1/orgs/${GITEA_ORG}/repos" \
+                  -H 'Content-Type: application/json' \
+                  -d "{\"name\":\"${name}\",\"private\":false,\"auto_init\":false}" >/dev/null || true
+
+                rm -rf "/tmp/${name}"
+                cp -r "${path}" "/tmp/${name}"
+                cd "/tmp/${name}"
+
+                # Point any devfile at Gitea instead of the public source repo.
+                # This is what makes the demo self-contained once seeded.
+                if [ -f devfile.yaml ]; then
+                  sed -i \
+                    -e "s|https://github.com/[^\"]*\.git|https://${GITEA_EXTERNAL_HOST}/${GITEA_ORG}/${name}.git|g" \
+                    devfile.yaml
+                  # Content is now at the repo root, so drop the monorepo subDir.
+                  sed -i '/^\s*subDir:/d' devfile.yaml
+                fi
+
+                git init -q -b main
+                git config user.email "platform@example.internal"
+                git config user.name "Platform Engineering"
+                git add -A
+                git commit -q -m "Approved stack, published by platform engineering"
+                git remote add origin \
+                  "http://${ADMIN_USER}:${ADMIN_PASSWORD}@gitea.DEMO_NAMESPACE_PLACEHOLDER.svc.cluster.local:3000/${GITEA_ORG}/${name}.git"
+                git push -q -u origin main --force
+                cd /tmp
+              }
+
+              seed_repo "payments-service"   "/tmp/src/samples/spring-boot-app"
+              seed_repo "ansible-automation" "/tmp/src/samples/ansible-workspace"
+              seed_repo "ledger-service"     "/tmp/src/samples/bare-app"
+
+              echo
+              echo "Gitea seeded. Repos available at:"
+              echo "  https://${GITEA_EXTERNAL_HOST}/${GITEA_ORG}/payments-service"
+              echo "  https://${GITEA_EXTERNAL_HOST}/${GITEA_ORG}/ansible-automation"
+              echo "  https://${GITEA_EXTERNAL_HOST}/${GITEA_ORG}/ledger-service"

@@ -1,0 +1,78 @@
+---
+# Internally hosted coding model. This is deliberately small so it runs on CPU
+# on a disposable cluster. The architectural point is not the model, it is that
+# inference stays inside the cluster boundary and no source code leaves it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: AI_SERVICE_NAME_PLACEHOLDER
+  namespace: DEMO_NAMESPACE_PLACEHOLDER
+  labels:
+    app: AI_SERVICE_NAME_PLACEHOLDER
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: AI_SERVICE_NAME_PLACEHOLDER
+  template:
+    metadata:
+      labels:
+        app: AI_SERVICE_NAME_PLACEHOLDER
+    spec:
+      containers:
+        - name: AI_SERVICE_NAME_PLACEHOLDER
+          image: docker.io/ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          env:
+            - name: OLLAMA_HOST
+              value: "0.0.0.0:11434"
+            - name: OLLAMA_MODELS
+              value: /models
+            # Allow the Dev Spaces workspace origin to call the API.
+            - name: OLLAMA_ORIGINS
+              value: "*"
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 10Gi
+          volumeMounts:
+            - name: models
+              mountPath: /models
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 11434
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: AI_SERVICE_NAME_PLACEHOLDER-models
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: AI_SERVICE_NAME_PLACEHOLDER-models
+  namespace: DEMO_NAMESPACE_PLACEHOLDER
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: AI_SERVICE_NAME_PLACEHOLDER
+  namespace: DEMO_NAMESPACE_PLACEHOLDER
+spec:
+  selector:
+    app: AI_SERVICE_NAME_PLACEHOLDER
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434

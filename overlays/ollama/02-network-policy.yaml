@@ -1,0 +1,22 @@
+---
+# Optional but worth showing. Workspaces are ordinary pods, so ordinary
+# network policy applies. Allows developer namespaces to reach the model
+# service and nothing else in this namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-devspaces-to-model
+  namespace: DEMO_NAMESPACE_PLACEHOLDER
+spec:
+  podSelector:
+    matchLabels:
+      app: AI_SERVICE_NAME_PLACEHOLDER
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/part-of: che.eclipse.org
+      ports:
+        - protocol: TCP
+          port: 11434

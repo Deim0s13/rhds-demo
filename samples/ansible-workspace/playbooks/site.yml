@@ -1,0 +1,31 @@
+---
+- name: Demonstrate a governed Ansible authoring loop inside Dev Spaces
+  hosts: local
+  gather_facts: true
+  vars:
+    service_name: payments-api
+    compliance_baseline: "NZ-BANK-BASELINE-2026"
+  tasks:
+    - name: Show where this content is actually running
+      ansible.builtin.debug:
+        msg: >-
+          Authoring {{ service_name }} against baseline {{ compliance_baseline }}
+          on {{ ansible_facts['hostname'] }} inside an OpenShift Dev Spaces workspace.
+
+    - name: Render a sample configuration artefact
+      ansible.builtin.copy:
+        content: |
+          service: {{ service_name }}
+          baseline: {{ compliance_baseline }}
+          generated_by: ansible-dev-spaces-demo
+        dest: /tmp/{{ service_name }}.yml
+        mode: "0644"
+
+    - name: Confirm the artefact exists
+      ansible.builtin.command: cat /tmp/{{ service_name }}.yml
+      register: rendered
+      changed_when: false
+
+    - name: Display the rendered artefact
+      ansible.builtin.debug:
+        var: rendered.stdout_lines

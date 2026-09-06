@@ -1,0 +1,9 @@
+---
+galaxy_info:
+  role_name: demo_baseline
+  author: platform-engineering
+  description: Minimal role used to demonstrate linting and molecule testing in Dev Spaces
+  license: Apache-2.0
+  min_ansible_version: "2.15"
+  galaxy_tags: []
+dependencies: []
