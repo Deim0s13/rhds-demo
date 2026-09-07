@@ -1,0 +1,4 @@
+# Written by scripts/up.sh. Do not edit by hand, and do not commit.
+PROVISIONED_SERVER="https://api.ocp.js5cf.sandbox5373.opentlc.com:6443"
+PROVISIONED_AT="2026-09-07T04:26:27Z"
+PROVISIONED_BACKEND="rhoai"

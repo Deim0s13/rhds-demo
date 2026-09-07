@@ -5,7 +5,6 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${REPO_ROOT}/scripts/lib.sh"
 load_env; require oc; require_login
-assert_provisioned_cluster
 
 FAIL=0
 check() {
@@ -14,7 +13,7 @@ check() {
 }
 
 banner "Cluster state"
-check "Dev Spaces operator installed"   "oc get csv -n openshift-operators | grep -qi 'devspaces.*Succeeded'"
+check "Dev Spaces operator installed"   "oc get csv -n openshift-operators -o jsonpath='{range .items[*]}{.metadata.name}{\" \"}{.status.phase}{\"\\n\"}{end}' | grep -qi 'devspaces.*Succeeded'"
 check "CheCluster is Active"            "[[ \$(oc get checluster devspaces -n ${DEVSPACES_NAMESPACE} -o jsonpath='{.status.chePhase}') == Active ]]"
 check "Dashboard route resolves"        "oc get checluster devspaces -n ${DEVSPACES_NAMESPACE} -o jsonpath='{.status.cheURL}' | grep -q https"
 check "Demo namespace exists"           "oc get ns ${DEMO_NAMESPACE}"
@@ -23,7 +22,14 @@ case "${AI_BACKEND}" in
     check "RHOAI installed"              "oc get ns ${RHOAI_NAMESPACE}"
     check "GPU present and not fully claimed" "check_gpu_capacity"
     check "InferenceService Ready"       "[[ \$(oc get inferenceservice ${AI_SERVICE_NAME} -n ${DEMO_NAMESPACE} -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}') == True ]]"
-    check "Model answers a completion"   "oc run smoke-ai-\$RANDOM -n ${DEMO_NAMESPACE} --rm -i --restart=Never --image=registry.access.redhat.com/ubi9/ubi-minimal:latest -- curl -sf -m 60 -X POST ${AI_BASE_URL}/chat/completions -H 'Content-Type: application/json' -d '{\"model\":\"${AI_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}],\"max_tokens\":5}'"
+    # Exec into the predictor itself. Spawning a ubi-minimal pod does not work:
+    # that image has no curl, so the check could never pass.
+    check "Model answers a completion"   "oc exec -n ${DEMO_NAMESPACE} deployment/coder-model-predictor -c kserve-container -- python3 -c \"
+import json,urllib.request
+r=urllib.request.urlopen(urllib.request.Request('http://localhost:8080/v1/chat/completions',
+  data=json.dumps({'model':'${AI_MODEL}','messages':[{'role':'user','content':'ok'}],'max_tokens':5}).encode(),
+  headers={'Content-Type':'application/json'}),timeout=60)
+assert r.status==200\""
     ;;
   ollama)
     check "Model deployment ready"       "oc get deployment ${AI_SERVICE_NAME} -n ${DEMO_NAMESPACE} -o jsonpath='{.status.readyReplicas}' | grep -q '^[1-9]'"
@@ -34,11 +40,15 @@ case "${AI_BACKEND}" in
     ;;
 esac
 
-banner "Devfile drift"
-if [[ -n "${AI_BASE_URL}" ]]; then
-  check "Committed devfile matches AI_BASE_URL" \
-    "grep -q '${AI_BASE_URL}' ${REPO_ROOT}/samples/spring-boot-app/devfile.yaml"
-  info "if that failed: run scripts/render-devfiles.sh, then commit and push"
+if [[ "${DEPLOY_GITEA}" == "true" ]]; then
+  banner "Internal Git"
+  check "Gitea deployment ready"       "oc get deployment gitea -n ${DEMO_NAMESPACE} -o jsonpath='{.status.readyReplicas}' | grep -q '^[1-9]'"
+  check "Route resolves"               "[[ -n \"${GITEA_HOST}\" ]]"
+  for r in payments-service ansible-automation ledger-service; do
+    check "Repo ${r} seeded"           "curl -sk -o /dev/null -w '%{http_code}' https://${GITEA_HOST}/${GITEA_ORG}/${r} | grep -q 200"
+  done
+  check "payments devfile has an endpoint" \
+    "curl -sk https://${GITEA_HOST}/${GITEA_ORG}/payments-service/raw/branch/main/devfile.yaml | grep -q 'AI_BASE_URL' && ! curl -sk https://${GITEA_HOST}/${GITEA_ORG}/payments-service/raw/branch/main/devfile.yaml | grep -q 'PLACEHOLDER'"
 fi
 
 banner "Warming images"

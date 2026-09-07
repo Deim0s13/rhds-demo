@@ -1,6 +1,11 @@
 # Internal Git (Gitea Overlay)
 
-Optional. Off by default. Turn it on with `DEPLOY_GITEA="true"` in `demo.env`.
+On by default. Gitea is the demo's SCM: the samples are published into it as
+standalone repositories and every workspace clones from it over cluster-internal
+networking. Nothing in the demo reaches the internet, not even at bootstrap.
+
+Turning it off (`DEPLOY_GITEA="false"`) leaves you with no repository URLs to
+create workspaces from, so there is rarely a reason to.
 
 ## Say the constraint out loud
 
@@ -49,9 +54,6 @@ Be ready for these, because a good architect in the room will spot them.
   workspace image and this line disappears. That connects back to the act 3
   point about internally built base images, so it is worth using rather than
   hiding.
-- **Seeding reaches the internet.** The seed Job pulls sample content from your
-  public repo at bootstrap time. The demo itself touches nothing external. Say
-  so if asked.
 
 ## The OAuth talk track
 
@@ -119,6 +121,7 @@ credential ever reaches a laptop." Ten seconds, and you have made the point
 without standing anything up.
 
 ## Running it
+
 ```bash
 # demo.env
 DEPLOY_GITEA="true"
@@ -128,18 +131,34 @@ GITEA_ADMIN_PASSWORD="<regenerate per environment>"
 ```
 
 ```bash
-./scripts/up.sh                     # stands up and seeds Gitea
+./scripts/up.sh                     # stands up Gitea, then seeds it
 # start a workspace once so your user namespace exists
 ./scripts/gitea-credentials.sh      # inject the credential
 # restart the workspace to pick it up
 ```
 
-Seeding creates three repos under the org, each a standalone repo rather than a
-monorepo path, with devfile remotes rewritten to the Gitea Route:
+To re-publish after editing a sample, without a full bootstrap:
+
+```bash
+./scripts/seed-gitea.sh
+```
+
+`scripts/seed-gitea.sh` pushes straight from your working tree over the Gitea
+Route, rendering the AI endpoint into each devfile as it goes. Re-run it any time
+you change a sample: it is a force push, so the repos always match your tree.
+That makes iterating on a devfile a fifteen second loop instead of a
+commit-push-wait cycle.
+
+Three standalone repos, each with its devfile at the root:
 
 - `payments-service` — acts 2 to 4
 - `ansible-automation` — act 6
 - `ledger-service` — act 5, still deliberately without a devfile
+
+The devfiles carry no `projects` block. Dev Spaces clones the repository the
+workspace was created from, so declaring it again is redundant, and pinning a
+remote is what ties a devfile to one SCM. It also means these devfiles work
+unchanged against Bitbucket or GitHub Enterprise.
 
 Regenerate `GITEA_ADMIN_PASSWORD` per environment. Do not carry one between
 customers, and do not commit `demo.env`.
@@ -153,14 +172,14 @@ Do not give this its own act. Fold it into what you are already doing:
 - **Act 3**, when you reach the container image and the governance point, note
   that the Git remote is internal for the same reason the image is.
 - **Act 6**, the credential injection. Open a terminal in the workspace, `git
-  push` a small change, and point out that nothing was typed. Then show the
+push` a small change, and point out that nothing was typed. Then show the
   secret with `oc get secret`. Ninety seconds, high impact.
 
 ## If it breaks
 
-| Symptom | Do this |
-|---|---|
-| Seed Job fails | `oc logs job/gitea-seed -n <ns>`. Usually the admin user was not created; check the postStart hook in the gitea pod logs. |
-| Workspace clone fails on TLS | The gitconfig ConfigMap did not mount. Restart the workspace after running `gitea-credentials.sh`. |
-| Dashboard cannot reach the repo URL | You used the Service DNS somewhere instead of the Route. The browser cannot resolve cluster-internal DNS. |
-| Running short on time | Set `DEPLOY_GITEA="false"` and run from GitHub. The architectural point survives being asserted rather than shown. |
+| Symptom                             | Do this                                                                                                                   |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Seed Job fails                      | `oc logs job/gitea-seed -n <ns>`. Usually the admin user was not created; check the postStart hook in the gitea pod logs. |
+| Workspace clone fails on TLS        | The gitconfig ConfigMap did not mount. Restart the workspace after running `gitea-credentials.sh`.                        |
+| Dashboard cannot reach the repo URL | You used the Service DNS somewhere instead of the Route. The browser cannot resolve cluster-internal DNS.                 |
+| Running short on time               | Set `DEPLOY_GITEA="false"` and run from GitHub. The architectural point survives being asserted rather than shown.        |

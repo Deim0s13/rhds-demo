@@ -1,31 +1,24 @@
 schemaVersion: 2.2.0
 metadata:
-  name: spring-boot-payments
-  displayName: Spring Boot Payments Service
-  description: Sample Spring Boot service used to demonstrate the Dev Spaces inner loop
+  name: payments-service
+  displayName: Payments Service
+  description: Spring Boot payments service. Approved Java 21 stack.
   language: Java
   projectType: springboot
   tags:
     - Java
     - Spring Boot
-    - Maven
+    - Approved
 
-# The project is cloned automatically when the workspace starts. This is why the
-# developer goes from URL to running code without a single local prerequisite.
-projects:
-  - name: spring-boot-payments
-    git:
-      remotes:
-        origin: "https://github.com/GIT_ORG_PLACEHOLDER/GIT_REPO_PLACEHOLDER.git"
-      checkoutFrom:
-        revision: GIT_BRANCH_PLACEHOLDER
-    subDir: samples/spring-boot-app
-
+# No projects block. When a workspace is created from this repository's URL,
+# Dev Spaces clones that repository automatically. Declaring it again would be
+# redundant, and pinning a remote here is what ties a devfile to one SCM.
 components:
   - name: tools
     container:
-      # Red Hat Universal Developer Image. In a bank this is replaced by an
-      # internally built, scanned image with the corporate CA bundle baked in.
+      # In a bank this is your internally built, scanned image carrying the
+      # corporate CA bundle. Platform team owns it: one rebuild on a CVE,
+      # not four hundred laptops.
       image: registry.access.redhat.com/ubi9/openjdk-21:latest
       memoryRequest: 1Gi
       memoryLimit: 4Gi
@@ -35,22 +28,18 @@ components:
       env:
         - name: MAVEN_OPTS
           value: "-Xmx2048m"
-        # Points the in-IDE assistant at the in-cluster model. Nothing leaves
-        # the cluster; this is the version of AI assistance a regulated shop
-        # can actually approve.
-        # Rendered by scripts/render-devfiles.sh from demo.env, then committed.
-        # Dev Spaces fetches this file directly from Git, so it cannot contain
-        # placeholders the way the bootstrap manifests do.
+        # Rendered at seed time from demo.env. Inference stays inside the
+        # cluster: no code leaves the boundary to get a completion.
         - name: AI_BASE_URL
-          value: "http://coder-model-predictor.devspaces-demo.svc.cluster.local:8080/v1"
+          value: "AI_BASE_URL_PLACEHOLDER"
         - name: AI_MODEL
-          value: "llama-3.2-3b-instruct"
-        # The assistant needs a key field even when the endpoint does not check
-        # one. Never put a real credential in a devfile; inject it as a secret.
+          value: "AI_MODEL_PLACEHOLDER"
+        # The assistant expects a key field even where the endpoint does not
+        # check one. Never put a real credential in a devfile.
         - name: AI_API_KEY
           value: "not-required-in-cluster"
       endpoints:
-        - name: http-springboot
+        - name: http-payments
           targetPort: 8080
           exposure: public
           protocol: https

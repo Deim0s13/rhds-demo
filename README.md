@@ -13,7 +13,6 @@ regulated environments. The framing is deliberately banking-shaped.
 cp demo.env.example demo.env      # edit GIT_ORG if you fork this
 oc login --token=... --server=...
 ./scripts/up.sh                   # 10 to 15 minutes, safe to re-run
-./scripts/render-devfiles.sh      # then commit and push the devfiles
 ./scripts/smoke.sh                # run 30 min before you present
 ```
 
@@ -23,15 +22,15 @@ does not work in front of a customer.
 
 ## What the demo covers
 
-| Act | Minutes | Shows |
-|---|---|---|
-| 1 | 4 | Framing: onboarding time and environment drift as real costs |
-| 2 | 5 | Git URL to running code, no local prerequisites |
-| 3 | 6 | The devfile, and that it is ordinary Kubernetes underneath |
-| 4 | 6 | Desktop VS Code and JetBrains against the same workspace |
-| 5 | 8 | Authoring a devfile live, plus the curated registry |
-| 6 | 6 | Ansible authoring stack, and an AI assistant on an in-cluster model (RHOAI/vLLM on GPU, or Ollama on CPU) |
-| 7 | 5 | Operating model: ownership, quota, cost, pilot selection |
+| Act | Minutes | Shows                                                                                                     |
+| --- | ------- | --------------------------------------------------------------------------------------------------------- |
+| 1   | 4       | Framing: onboarding time and environment drift as real costs                                              |
+| 2   | 5       | Git URL to running code, no local prerequisites                                                           |
+| 3   | 6       | The devfile, and that it is ordinary Kubernetes underneath                                                |
+| 4   | 6       | Desktop VS Code and JetBrains against the same workspace                                                  |
+| 5   | 8       | Authoring a devfile live, plus the curated registry                                                       |
+| 6   | 6       | Ansible authoring stack, and an AI assistant on an in-cluster model (RHOAI/vLLM on GPU, or Ollama on CPU) |
+| 7   | 5       | Operating model: ownership, quota, cost, pilot selection                                                  |
 
 ## Layout
 
@@ -40,13 +39,13 @@ bootstrap/    Operator, CheCluster, demo namespace, prepull DaemonSet
 overlays/
   rhoai/              vLLM ServingRuntime + InferenceService on GPU
   ollama/             CPU fallback, always works
-  gitea/              Optional internal Git, off by default
+  gitea/              Internal Git, on by default
 registry/     Curated devfile catalogue, the governance artefact
-samples/
-  spring-boot-app/    Prepared, has a devfile. Acts 2 to 4.
-  ansible-workspace/  Ansible authoring stack. Act 6.
-  bare-app/           No devfile on purpose. Act 5.
-scripts/      up / smoke / reset / down, plus shared helpers
+samples/            source of truth; published into Gitea as standalone repos
+  payments-service/   Prepared, has a devfile. Acts 2 to 4.
+  ansible-automation/ Ansible authoring stack. Act 6.
+  ledger-service/     No devfile on purpose. Act 5.
+scripts/      up / seed-gitea / smoke / reset / down, plus shared helpers
 docs/         Runbook, live devfile build, AI backend and internal Git guides
 ```
 
@@ -56,9 +55,11 @@ docs/         Runbook, live devfile build, AI backend and internal Git guides
   `demo.env` and `scripts/lib.sh::render`. The environment rotates every five days.
 - **`up.sh` must stay idempotent.** Re-running it on a fresh cluster is the
   normal case, not the exception.
-- **Devfiles cannot use placeholders.** Dev Spaces reads them straight from Git.
-  Anything cluster-specific in a devfile goes through `scripts/render-devfiles.sh`
-  and has to be committed and pushed.
+- **This repo is the asset; Gitea is the demo's SCM.** The samples live here as
+  folders and are published into Gitea as standalone repos by
+  `scripts/seed-gitea.sh`. Nothing clones this repo at demo time.
+- **Devfiles carry no `projects` block and no `subDir`.** Dev Spaces clones the
+  repo the workspace came from. `subDir` is not valid in schema 2.2.0.
 - **Every new segment needs a runbook entry with a failure mode.** A demo asset
   without a recovery plan is a liability, not an asset.
 

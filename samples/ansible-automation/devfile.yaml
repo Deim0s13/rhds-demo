@@ -1,0 +1,62 @@
+schemaVersion: 2.2.0
+metadata:
+  name: ansible-automation
+  displayName: Ansible Automation Workspace
+  description: Governed authoring environment for Ansible content, with dev tools, linting and molecule preinstalled
+  language: Ansible
+  projectType: ansible
+  tags:
+    - Ansible
+    - Automation
+    - Approved
+
+components:
+  - name: tooling
+    # Ansible dev tools: ansible-core, ansible-lint, ansible-navigator,
+    # molecule and ansible-builder in one image. The platform team decides
+    # which tooling is present, not each individual laptop.
+    container:
+      image: ghcr.io/ansible/community-ansible-dev-tools:latest
+      memoryRequest: 1Gi
+      memoryLimit: 8Gi
+      cpuRequest: 500m
+      cpuLimit: 2000m
+      mountSources: true
+      args: ["tail", "-f", "/dev/null"]
+      env:
+        - name: ANSIBLE_CONFIG
+          value: ${PROJECT_SOURCE}/ansible.cfg
+        - name: ANSIBLE_LOCALHOST_WARNING
+          value: "False"
+        - name: AI_BASE_URL
+          value: "AI_BASE_URL_PLACEHOLDER"
+        - name: AI_MODEL
+          value: "AI_MODEL_PLACEHOLDER"
+        - name: AI_API_KEY
+          value: "not-required-in-cluster"
+
+commands:
+  - id: lint
+    exec:
+      component: tooling
+      commandLine: "ansible-lint playbooks/"
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: test
+        isDefault: true
+  - id: syntax-check
+    exec:
+      component: tooling
+      commandLine: "ansible-playbook --syntax-check playbooks/site.yml"
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: build
+        isDefault: true
+  - id: run-playbook
+    exec:
+      component: tooling
+      commandLine: "ansible-playbook -i inventory/hosts playbooks/site.yml"
+      workingDir: ${PROJECT_SOURCE}
+      group:
+        kind: run
+        isDefault: true

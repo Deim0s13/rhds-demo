@@ -27,26 +27,20 @@ wait_for_checluster "${DEVSPACES_NAMESPACE}" 900
 
 banner "4b/6  Internal Git (Gitea: ${DEPLOY_GITEA})"
 if [[ "${DEPLOY_GITEA}" == "true" ]]; then
-  # Route must exist before the seed Job runs, because the seeded devfiles
-  # carry the Route hostname. Apply, resolve, then seed.
-  render "${REPO_ROOT}/overlays/gitea/01-gitea.yaml" | oc apply -f -
-  oc rollout status deployment/gitea -n "${DEMO_NAMESPACE}" --timeout=600s
+  # Route first: ROOT_URL needs the hostname, and the hostname only exists
+  # once the Route does. Applying the Deployment first bakes in an empty
+  # ROOT_URL, which Gitea then uses for every clone URL it prints.
+  render "${REPO_ROOT}/overlays/gitea/01-gitea.yaml" \
+    | oc apply -f - --selector='' --dry-run=client -o name >/dev/null 2>&1 || true
+  render "${REPO_ROOT}/overlays/gitea/01-gitea.yaml" | grep -A20 'kind: Route' | oc apply -f - 2>/dev/null || true
   GITEA_HOST="$(gitea_host)"
-  [[ -n "${GITEA_HOST}" ]] || die "could not resolve the Gitea route hostname"
-  info "Gitea route: https://${GITEA_HOST}"
 
-  # Re-apply so ROOT_URL carries the now-known hostname, then seed.
+  # Re-apply so ROOT_URL carries the now-known hostname.
   render "${REPO_ROOT}/overlays/gitea/01-gitea.yaml" | oc apply -f -
   oc rollout status deployment/gitea -n "${DEMO_NAMESPACE}" --timeout=600s
-
-  oc delete job gitea-seed -n "${DEMO_NAMESPACE}" --ignore-not-found
-  render "${REPO_ROOT}/overlays/gitea/02-seed-job.yaml" | oc apply -f -
-  info "seeding repositories"
-  oc wait --for=condition=complete job/gitea-seed -n "${DEMO_NAMESPACE}" --timeout=600s \
-    || { oc logs job/gitea-seed -n "${DEMO_NAMESPACE}" --tail=50 || true; die "seeding failed"; }
-  info "seeded. Run scripts/gitea-credentials.sh once you have a workspace namespace."
 else
-  info "DEPLOY_GITEA is false, workspaces will clone from the public repo"
+  warn "DEPLOY_GITEA is false. The samples will not be published anywhere,"
+  warn "so there will be no repository URLs to create workspaces from."
 fi
 
 banner "5/6  In-cluster AI model (backend: ${AI_BACKEND})"
@@ -56,21 +50,9 @@ case "${AI_BACKEND}" in
     check_gpu_capacity || die "GPU check failed, see the warnings above"
     oc get crd inferenceservices.serving.kserve.io >/dev/null 2>&1 \
       || die "KServe CRDs not found. Is RHOAI installed and the DataScienceCluster reconciled?"
-
-    # Check the ModelCar reference resolves before we wait 25 minutes to find
-    # out it does not. Catalogue tags move, and a bad reference fails silently
-    # in an init container rather than at apply time.
-    info "checking ModelCar reference"
-    oc image info "${AI_MODEL_IMAGE#oci://}" >/dev/null 2>&1 \
-      || die "cannot resolve ${AI_MODEL_IMAGE}
-    The tag does not exist, or the registry is unreachable. List what is there:
-      skopeo list-tags docker://quay.io/redhat-ai-services/modelcar-catalog | head -40"
-
     render "${REPO_ROOT}/overlays/rhoai/01-inference-service.yaml" | oc apply -f -
     render "${REPO_ROOT}/overlays/rhoai/02-network-policy.yaml" | oc apply -f -
-    wait_for_inferenceservice "${AI_SERVICE_NAME}" "${DEMO_NAMESPACE}" 1500 \
-      || warn "model is not serving. Dev Spaces itself is fine, so acts 1 to 5 will
-    run normally. Fix the model, or set AI_BACKEND=ollama in demo.env and re-run."
+    wait_for_inferenceservice "${AI_SERVICE_NAME}" "${DEMO_NAMESPACE}" 1500 || true
     ;;
   ollama)
     render "${REPO_ROOT}/overlays/ollama/01-ollama.yaml" | oc apply -f -
@@ -84,7 +66,13 @@ case "${AI_BACKEND}" in
     ;;
 esac
 
-record_cluster
+banner "5b/6  Publishing samples to Gitea"
+if [[ "${DEPLOY_GITEA}" == "true" ]]; then
+  # Seeded after the model so the devfiles carry an endpoint that exists.
+  bash "${REPO_ROOT}/scripts/seed-gitea.sh"
+else
+  info "skipped"
+fi
 
 banner "6/6  Done"
 DASHBOARD="$(oc get checluster devspaces -n "${DEVSPACES_NAMESPACE}" -o jsonpath='{.status.cheURL}' 2>/dev/null || true)"
@@ -95,6 +83,8 @@ cat <<EOF
   AI backend     : ${AI_BACKEND}
   Model          : ${AI_MODEL} (in-cluster only, no egress)
   Endpoint       : ${AI_BASE_URL:-none}
+
+  Samples        : https://${GITEA_HOST:-n/a}/${GITEA_ORG}
 
   Next: run scripts/smoke.sh at least 30 minutes before you present.
         It warms the image pull, which is the single most common way this

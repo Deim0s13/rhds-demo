@@ -82,20 +82,24 @@ spec:
           lifecycle:
             postStart:
               exec:
-                # Gitea only creates an admin through its CLI, and only once.
-                # Idempotent: the second run fails harmlessly because the user
-                # already exists, which is what we want on a pod restart.
+                # No su. OpenShift's restricted SCC runs this container as an
+                # arbitrary UID, so there is no git user to switch to and su
+                # fails, which kills the container. Everything here is
+                # best-effort: a failing postStart hook must never take the
+                # pod down, so the whole thing ends in || true.
                 command:
                   - /bin/sh
                   - -c
                   - |
-                    sleep 20
-                    su git -c "gitea admin user create \
-                      --admin \
-                      --username ${GITEA_ADMIN_USERNAME} \
-                      --password ${GITEA_ADMIN_PASSWORD} \
-                      --email admin@example.internal \
-                      --must-change-password=false" || true
+                    (
+                      sleep 25
+                      gitea admin user create \
+                        --admin \
+                        --username "${GITEA_ADMIN_USERNAME}" \
+                        --password "${GITEA_ADMIN_PASSWORD}" \
+                        --email admin@example.internal \
+                        --must-change-password=false
+                    ) || true
           volumeMounts:
             - name: data
               mountPath: /data
