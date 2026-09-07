@@ -5,6 +5,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${REPO_ROOT}/scripts/lib.sh"
 load_env; require oc; require_login
+assert_provisioned_cluster
 
 banner "Deleting DevWorkspaces for $(oc whoami)"
 for ns in $(oc get devworkspace --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u); do

@@ -12,9 +12,55 @@ require() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is not on PATH"
 }
 
+# Where up.sh records the cluster it last provisioned. Gitignored: it is local
+# state about your environment, not part of the demo.
+STATE_FILE="${REPO_ROOT}/.demo-state"
+
 require_login() {
   oc whoami >/dev/null 2>&1 || die "not logged in. Run: oc login --token=... --server=..."
-  info "logged in as $(oc whoami) on $(oc whoami --show-server)"
+  CURRENT_SERVER="$(oc whoami --show-server)"
+  info "logged in as $(oc whoami) on ${CURRENT_SERVER}"
+}
+
+# Called by up.sh once it has succeeded. Records what we built and where.
+record_cluster() {
+  cat > "${STATE_FILE}" <<EOF
+# Written by scripts/up.sh. Do not edit by hand, and do not commit.
+PROVISIONED_SERVER="${CURRENT_SERVER}"
+PROVISIONED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+PROVISIONED_BACKEND="${AI_BACKEND}"
+EOF
+}
+
+# Called by every script that expects a provisioned cluster. Catches the case
+# where your kube context has moved since up.sh ran: otherwise every check fails
+# against a cluster that was never set up, and the output reads like a broken
+# demo rather than a wrong kubeconfig.
+assert_provisioned_cluster() {
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    warn "no ${STATE_FILE##*/} found, so I cannot tell which cluster was provisioned."
+    warn "if this is a fresh environment, run scripts/up.sh first."
+    return 0
+  fi
+  # shellcheck disable=SC1090
+  source "${STATE_FILE}"
+
+  if [[ "${CURRENT_SERVER}" != "${PROVISIONED_SERVER}" ]]; then
+    die "wrong cluster.
+    provisioned : ${PROVISIONED_SERVER}
+    current     : ${CURRENT_SERVER}
+    Your kube context has moved since up.sh ran. Log back into the demo
+    cluster, or run up.sh here if this is a new environment."
+  fi
+
+  # These environments expire. Five days in, you want to know before a customer does.
+  local age_days
+  age_days=$(( ( $(date -u +%s) - $(date -u -d "${PROVISIONED_AT}" +%s 2>/dev/null \
+    || date -u -jf "%Y-%m-%dT%H:%M:%SZ" "${PROVISIONED_AT}" +%s) ) / 86400 ))
+  if (( age_days >= 4 )); then
+    warn "this environment was provisioned ${age_days} days ago and typically lasts 5."
+    warn "request a new one before your next session."
+  fi
 }
 
 load_env() {
@@ -91,6 +137,16 @@ render() {
     -e "s|USER_NAMESPACE_PLACEHOLDER|${USER_NAMESPACE:-}|g" \
     "$1"
 }
+
+# An init container in BackOff will never recover on its own. Fail now
+# rather than burning the full timeout on something that is already dead.
+if oc get pods -n "${ns}" -l component=predictor \
+      -o jsonpath='{.items[*].status.initContainerStatuses[*].state.waiting.reason}' 2>/dev/null \
+      | grep -q 'ImagePullBackOff\|ErrImagePull\|CrashLoopBackOff'; then
+  warn "predictor init container is in backoff, this will not recover"
+  oc describe pod -n "${ns}" -l component=predictor | tail -15
+  return 1
+fi
 
 wait_for_csv() {
   local name="$1" ns="$2" timeout="${3:-600}" elapsed=0

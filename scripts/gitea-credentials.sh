@@ -8,6 +8,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${REPO_ROOT}/scripts/lib.sh"
 load_env; require oc; require_login
+assert_provisioned_cluster
 
 [[ "${DEPLOY_GITEA}" == "true" ]] || die "DEPLOY_GITEA is false, nothing to inject"
 [[ -n "${GITEA_HOST}" ]] || die "Gitea route not found, has up.sh run?"

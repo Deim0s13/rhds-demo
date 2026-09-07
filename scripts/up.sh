@@ -56,9 +56,21 @@ case "${AI_BACKEND}" in
     check_gpu_capacity || die "GPU check failed, see the warnings above"
     oc get crd inferenceservices.serving.kserve.io >/dev/null 2>&1 \
       || die "KServe CRDs not found. Is RHOAI installed and the DataScienceCluster reconciled?"
+
+    # Check the ModelCar reference resolves before we wait 25 minutes to find
+    # out it does not. Catalogue tags move, and a bad reference fails silently
+    # in an init container rather than at apply time.
+    info "checking ModelCar reference"
+    oc image info "${AI_MODEL_IMAGE#oci://}" >/dev/null 2>&1 \
+      || die "cannot resolve ${AI_MODEL_IMAGE}
+    The tag does not exist, or the registry is unreachable. List what is there:
+      skopeo list-tags docker://quay.io/redhat-ai-services/modelcar-catalog | head -40"
+
     render "${REPO_ROOT}/overlays/rhoai/01-inference-service.yaml" | oc apply -f -
     render "${REPO_ROOT}/overlays/rhoai/02-network-policy.yaml" | oc apply -f -
-    wait_for_inferenceservice "${AI_SERVICE_NAME}" "${DEMO_NAMESPACE}" 1500 || true
+    wait_for_inferenceservice "${AI_SERVICE_NAME}" "${DEMO_NAMESPACE}" 1500 \
+      || warn "model is not serving. Dev Spaces itself is fine, so acts 1 to 5 will
+    run normally. Fix the model, or set AI_BACKEND=ollama in demo.env and re-run."
     ;;
   ollama)
     render "${REPO_ROOT}/overlays/ollama/01-ollama.yaml" | oc apply -f -
@@ -71,6 +83,8 @@ case "${AI_BACKEND}" in
     info "AI_BACKEND is none, skipping the model entirely"
     ;;
 esac
+
+record_cluster
 
 banner "6/6  Done"
 DASHBOARD="$(oc get checluster devspaces -n "${DEVSPACES_NAMESPACE}" -o jsonpath='{.status.cheURL}' 2>/dev/null || true)"
