@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Shared helpers. Sourced, not executed.
+# This file is sourced, not executed. Everything below must live inside a
+# function; a bare statement here runs on every source and breaks every script.
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
@@ -138,16 +140,6 @@ render() {
     "$1"
 }
 
-# An init container in BackOff will never recover on its own. Fail now
-# rather than burning the full timeout on something that is already dead.
-if oc get pods -n "${ns}" -l component=predictor \
-      -o jsonpath='{.items[*].status.initContainerStatuses[*].state.waiting.reason}' 2>/dev/null \
-      | grep -q 'ImagePullBackOff\|ErrImagePull\|CrashLoopBackOff'; then
-  warn "predictor init container is in backoff, this will not recover"
-  oc describe pod -n "${ns}" -l component=predictor | tail -15
-  return 1
-fi
-
 wait_for_csv() {
   local name="$1" ns="$2" timeout="${3:-600}" elapsed=0
   info "waiting for ${name} CSV in ${ns}"
@@ -187,6 +179,17 @@ wait_for_inferenceservice() {
     if [[ "${ready}" == "True" ]]; then
       info "model is serving"; return 0
     fi
+
+    # An init container in backoff will never recover on its own. Fail now
+    # rather than burning the full timeout on something that is already dead.
+    if oc get pods -n "${ns}" -l component=predictor \
+         -o jsonpath='{.items[*].status.initContainerStatuses[*].state.waiting.reason}' 2>/dev/null \
+         | grep -q 'ImagePullBackOff\|ErrImagePull\|CrashLoopBackOff'; then
+      warn "predictor init container is in backoff, this will not recover"
+      oc describe pod -n "${ns}" -l component=predictor | tail -15
+      return 1
+    fi
+
     sleep 20; elapsed=$((elapsed+20))
     (( elapsed % 60 == 0 )) && info "  still waiting (${elapsed}s)"
   done

@@ -52,7 +52,7 @@ components:
         - name: AI_BASE_URL
           value: "http://coder-model-predictor.devspaces-demo.svc.cluster.local:8080/v1"
         - name: AI_MODEL
-          value: "qwen2.5-coder-7b-instruct"
+          value: "llama-3.2-3b-instruct"
         # The assistant needs a key field even when the endpoint does not check
         # one. Never put a real credential in a devfile; inject it as a secret.
         - name: AI_API_KEY
