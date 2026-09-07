@@ -5,12 +5,12 @@ so the backend is a variable in `demo.env`, not a fork of the demo.
 
 ## Which one, when
 
-| | `rhoai` | `ollama` |
-|---|---|---|
-| Environment needed | RHOAI with GPU | any OpenShift |
-| Adds to bootstrap | ~10 to 20 min | ~5 min |
-| Model | 7B coder on GPU, genuinely good | 1.5B on CPU, adequate |
-| Best for | risk, security, EA, platform teams | app developers, tight timings, fallback |
+|                    | `rhoai`                            | `ollama`                                |
+| ------------------ | ---------------------------------- | --------------------------------------- |
+| Environment needed | RHOAI with GPU                     | any OpenShift                           |
+| Adds to bootstrap  | ~10 to 20 min                      | ~5 min                                  |
+| Model              | 7B coder on GPU, genuinely good    | 1.5B on CPU, adequate                   |
+| Best for           | risk, security, EA, platform teams | app developers, tight timings, fallback |
 
 **Default to `rhoai` when you have the environment and the room contains anyone
 who owns risk or architecture.** The reason is not the model quality. It is that
@@ -56,6 +56,37 @@ bank this is the only acceptable answer anyway, and it is worth saying so live:
 model weights are a supply chain artefact and belong under the same registry
 controls as your base images. That connects neatly to the point you already made
 in act 3 about scanned internal images.
+
+### The GPU is probably already in use
+
+RHOAI environments are commonly provisioned with a sample model already being
+served. It holds the GPU, so your InferenceService will sit Pending and the
+cause is not obvious from its status.
+
+`up.sh` handles the common case automatically. It looks for pods requesting a
+GPU outside the demo namespace, and deletes the holding namespace **only** if it
+appears in `RHDP_SAMPLE_NAMESPACES` in `demo.env`. Anything not on that list
+produces a warning and is left alone.
+
+That asymmetry is deliberate. The script has to stay safe to run on a shared or
+customer cluster, so it will only remove things we know are disposable RHDP
+scaffolding. `my-first-model` is the one that ships with the standard template;
+add others as you meet them.
+
+Two escape hatches:
+
+- `FREE_GPU="false"` in `demo.env` warns and never deletes anything. Use this on
+  any cluster you did not personally provision.
+- `./scripts/gpu-claims.sh` is read-only. It lists every GPU holder, including
+  notebooks and InferenceServices, with the commands to scale each down. Run it
+  first if you want to see what you are dealing with before `up.sh` touches it.
+
+The checks measure free GPUs rather than total GPUs, so a claimed GPU surfaces
+before you have waited fifteen minutes for a model pull rather than after.
+
+Allow a minute after scaling down. The pod has to terminate before the device
+plugin releases the GPU, and the scheduler will not place your predictor until
+it does. Do not conclude something else is broken during that window.
 
 ### Devfiles have to be pushed
 

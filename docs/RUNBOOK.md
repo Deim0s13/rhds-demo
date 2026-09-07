@@ -21,6 +21,10 @@ Three claims, in this order. Every act should ladder back to one of them.
 - [ ] Decided whether Gitea is on (`DEPLOY_GITEA`), see `docs/INTERNAL-GIT.md`.
       If on: credentials injected and a workspace restarted since.
 - [ ] On the RHOAI path: ModelCar tag confirmed with `oc image info`.
+- [ ] On the RHOAI path: GPU actually free. New environments ship with a sample
+      model holding it. `up.sh` clears known RHDP sample namespaces
+      automatically; run `scripts/gpu-claims.sh` first if you want to look before
+      it acts, or set `FREE_GPU="false"` on any cluster you did not provision.
 - [ ] `scripts/up.sh` completed, at least a day ahead if you can.
 - [ ] `scripts/render-devfiles.sh` run, **and the result committed and pushed**.
 - [ ] `scripts/smoke.sh` green, run 30 minutes before you start.
@@ -82,8 +86,8 @@ platform team in the room, and they are usually the ones who can kill the deal.
 
 ## Act 4, local IDE and the handoff (6 min)
 
-This act exists to kill one specific objection: *"our senior developers will
-never give up IntelliJ."*
+This act exists to kill one specific objection: _"our senior developers will
+never give up IntelliJ."_
 
 1. From the workspace, connect **desktop VS Code**. Same container, same running
    process, local keybindings and extensions.
@@ -145,7 +149,7 @@ namespace. Either way, nothing leaves the cluster boundary.
 See `docs/AI-BACKEND.md` for which backend to run and why.
 
 **Land it, carefully.** The interesting claim is not that AI writes code. It is
-that the workspace is where you can *enforce* which assistant a developer uses
+that the workspace is where you can _enforce_ which assistant a developer uses
 and where inference happens. On a laptop you are trusting policy. Here it is
 configuration. Expect a risk or compliance person to follow up on this; that is
 a good outcome, not an interruption.
@@ -201,15 +205,15 @@ budget already.
 
 ## Failure modes and recovery
 
-| Symptom | Cause | Do this |
-|---|---|---|
-| Workspace takes minutes to start | Cold image pull | Talk over it, walk the CheCluster spec. Run `smoke.sh` next time. |
-| Desktop IDE will not attach | Token expired or pairing lost | Skip it, promise to return at the end. Do not debug live. |
-| Ansible workspace out of memory | `memoryLimit` too low for molecule | Bump to 8Gi in the devfile before the session. |
-| AI completion never returns | Model still loading, or devfile points at a stale endpoint | `oc get inferenceservice -n <ns>`. If it is Ready, you probably forgot to push the rendered devfile. Talk about placement rather than showing it. |
-| InferenceService stuck Pending | No allocatable GPU, or bad ModelCar reference | `oc describe pod -l component=predictor -n <ns>`. Set `AI_BACKEND=ollama` and re-run `up.sh`, roughly 5 minutes. |
-| Clone fails from Gitea | Credentials not mounted | Run `scripts/gitea-credentials.sh`, restart the workspace. |
-| Dashboard 503 | CheCluster still reconciling | `oc get checluster devspaces -n <ns> -o jsonpath='{.status.chePhase}'` |
+| Symptom                          | Cause                                                                                         | Do this                                                                                                                                           |
+| -------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace takes minutes to start | Cold image pull                                                                               | Talk over it, walk the CheCluster spec. Run `smoke.sh` next time.                                                                                 |
+| Desktop IDE will not attach      | Token expired or pairing lost                                                                 | Skip it, promise to return at the end. Do not debug live.                                                                                         |
+| Ansible workspace out of memory  | `memoryLimit` too low for molecule                                                            | Bump to 8Gi in the devfile before the session.                                                                                                    |
+| AI completion never returns      | Model still loading, or devfile points at a stale endpoint                                    | `oc get inferenceservice -n <ns>`. If it is Ready, you probably forgot to push the rendered devfile. Talk about placement rather than showing it. |
+| InferenceService stuck Pending   | GPU already claimed by a pre-existing workload, no allocatable GPU, or bad ModelCar reference | Run `scripts/gpu-claims.sh` first, that is the usual cause. Then:                                                                                 | `oc describe pod -l component=predictor -n <ns>`. Set `AI_BACKEND=ollama` and re-run `up.sh`, roughly 5 minutes. |
+| Clone fails from Gitea           | Credentials not mounted                                                                       | Run `scripts/gitea-credentials.sh`, restart the workspace.                                                                                        |
+| Dashboard 503                    | CheCluster still reconciling                                                                  | `oc get checluster devspaces -n <ns> -o jsonpath='{.status.chePhase}'`                                                                            |
 
 ## Cluster rotation
 

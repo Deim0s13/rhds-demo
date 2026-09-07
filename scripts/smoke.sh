@@ -20,7 +20,7 @@ check "Demo namespace exists"           "oc get ns ${DEMO_NAMESPACE}"
 case "${AI_BACKEND}" in
   rhoai)
     check "RHOAI installed"              "oc get ns ${RHOAI_NAMESPACE}"
-    check "GPU allocatable on a node"    "oc get nodes -o jsonpath='{.items[*].status.allocatable.nvidia\\.com/gpu}' | grep -q '[1-9]'"
+    check "GPU present and not fully claimed" "check_gpu_capacity"
     check "InferenceService Ready"       "[[ \$(oc get inferenceservice ${AI_SERVICE_NAME} -n ${DEMO_NAMESPACE} -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}') == True ]]"
     check "Model answers a completion"   "oc run smoke-ai-\$RANDOM -n ${DEMO_NAMESPACE} --rm -i --restart=Never --image=registry.access.redhat.com/ubi9/ubi-minimal:latest -- curl -sf -m 60 -X POST ${AI_BASE_URL}/chat/completions -H 'Content-Type: application/json' -d '{\"model\":\"${AI_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"ok\"}],\"max_tokens\":5}'"
     ;;

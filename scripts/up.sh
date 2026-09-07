@@ -52,6 +52,7 @@ fi
 banner "5/6  In-cluster AI model (backend: ${AI_BACKEND})"
 case "${AI_BACKEND}" in
   rhoai)
+    free_gpu_if_safe
     check_gpu_capacity || die "GPU check failed, see the warnings above"
     oc get crd inferenceservices.serving.kserve.io >/dev/null 2>&1 \
       || die "KServe CRDs not found. Is RHOAI installed and the DataScienceCluster reconciled?"

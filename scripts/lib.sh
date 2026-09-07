@@ -37,6 +37,8 @@ load_env() {
   esac
   [[ "${AI_BACKEND}" == "rhoai" ]] && : "${AI_MODEL_IMAGE:?AI_MODEL_IMAGE is required when AI_BACKEND=rhoai}"
   AI_BASE_URL="$(ai_base_url)"
+  FREE_GPU="${FREE_GPU:-true}"
+  RHDP_SAMPLE_NAMESPACES="${RHDP_SAMPLE_NAMESPACES:-my-first-model}"
   DEPLOY_GITEA="${DEPLOY_GITEA:-false}"
   GITEA_ORG="${GITEA_ORG:-platform-engineering}"
   GITEA_ADMIN_USER="${GITEA_ADMIN_USER:-platform-admin}"
@@ -138,15 +140,72 @@ wait_for_inferenceservice() {
   return 1
 }
 
+# Free the GPU held by known, disposable RHDP sample workloads.
+#
+# We act ONLY on namespaces in an explicit allow-list, and only when they are
+# actually holding a GPU. Deleting arbitrary namespaces we do not own is not
+# this script's job: it has to stay safe to run anywhere, including on a shared
+# or customer cluster. Anything not on the list produces a warning and nothing
+# else. Set FREE_GPU=false to disable and warn only.
+free_gpu_if_safe() {
+  local holders holder
+  holders="$(oc get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\t"}{.spec.containers[*].resources.requests.nvidia\.com/gpu}{"\n"}{end}' 2>/dev/null \
+    | awk -F'\t' -v ns="${DEMO_NAMESPACE}" '$3 != "" && $1 != ns {print $1}' | sort -u)"
+
+  if [[ -z "${holders}" ]]; then
+    info "no competing GPU workloads"
+    return 0
+  fi
+
+  for holder in ${holders}; do
+    if [[ "${FREE_GPU}" == "true" ]] && grep -qw -- "${holder}" <<< "${RHDP_SAMPLE_NAMESPACES}"; then
+      info "known RHDP sample namespace '${holder}' is holding a GPU, deleting"
+      oc delete namespace "${holder}" --wait=true
+    else
+      warn "namespace '${holder}' is holding a GPU and is not a known RHDP sample."
+      warn "  On a single-GPU cluster the predictor will sit Pending."
+      warn "  Inspect it with: ./scripts/gpu-claims.sh"
+      warn "  Free it and re-run, or set AI_BACKEND=ollama in demo.env."
+    fi
+  done
+}
+
 check_gpu_capacity() {
-  local gpus
-  gpus="$(oc get nodes -o jsonpath='{range .items[*]}{.status.allocatable.nvidia\.com/gpu}{"\n"}{end}' 2>/dev/null \
+  local total used free
+  total="$(oc get nodes -o jsonpath='{range .items[*]}{.status.allocatable.nvidia\.com/gpu}{"\n"}{end}' 2>/dev/null \
     | grep -v '^$' | paste -sd+ - | bc 2>/dev/null || echo 0)"
-  if [[ "${gpus:-0}" -lt 1 ]]; then
-    warn "no allocatable nvidia.com/gpu found on any node"
-    warn "either the GPU operator has not finished, or this is not the RHOAI environment"
-    warn "set AI_BACKEND=ollama in demo.env if you need to proceed without GPU"
+  total="${total:-0}"
+
+  if (( total < 1 )); then
+    warn "no allocatable nvidia.com/gpu on any node"
+    warn "either the GPU operator has not finished reconciling, or this is not"
+    warn "the RHOAI environment you think it is"
+    warn "fallback: set AI_BACKEND=ollama in demo.env and re-run up.sh"
     return 1
   fi
-  info "GPU capacity available: ${gpus}"
+
+  # Capacity is not availability. RHOAI demo environments frequently arrive with
+  # a sample workload already holding the GPU, which lets a naive capacity check
+  # pass and then leaves the InferenceService Pending with no obvious cause.
+  used="$(oc get pods --all-namespaces \
+    -o jsonpath='{range .items[?(@.status.phase=="Running")]}{range .spec.containers[*]}{.resources.requests.nvidia\.com/gpu}{"\n"}{end}{end}' 2>/dev/null \
+    | grep -v '^$' | paste -sd+ - | bc 2>/dev/null || echo 0)"
+  used="${used:-0}"
+  free=$(( total - used ))
+
+  info "GPU: ${total} allocatable, ${used} requested by running pods, ${free} free"
+
+  if (( free < 1 )); then
+    warn ""
+    warn "Every GPU is already claimed. This is normal on a freshly provisioned"
+    warn "RHOAI environment: they often ship with a sample model already served."
+    warn "Nothing here will schedule until you free one."
+    warn ""
+    warn "See what is holding them:"
+    warn "  ./scripts/gpu-claims.sh"
+    warn ""
+    warn "Then either scale down or delete the pre-existing workload, or set"
+    warn "AI_BACKEND=ollama in demo.env if you would rather not touch it."
+    return 1
+  fi
 }
