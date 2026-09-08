@@ -40,15 +40,24 @@ assert r.status==200\""
     ;;
 esac
 
-if [[ "${DEPLOY_GITEA}" == "true" ]]; then
+if [[ "${DEPLOY_GITLAB}" == "true" ]]; then
   banner "Internal Git"
-  check "Gitea deployment ready"       "oc get deployment gitea -n ${DEMO_NAMESPACE} -o jsonpath='{.status.readyReplicas}' | grep -q '^[1-9]'"
-  check "Route resolves"               "[[ -n \"${GITEA_HOST}\" ]]"
+  check "GitLab webservice ready"      "oc get deployment gitlab-webservice-default -n ${GITLAB_NAMESPACE} -o jsonpath='{.status.readyReplicas}' | grep -q '^[1-9]'"
+  check "Route resolves"               "curl -sk -o /dev/null -w '%{http_code}' https://${GITLAB_HOST}/users/sign_in | grep -q 200"
   for r in payments-service ansible-automation ledger-service; do
-    check "Repo ${r} seeded"           "curl -sk -o /dev/null -w '%{http_code}' https://${GITEA_HOST}/${GITEA_ORG}/${r} | grep -q 200"
+    check "Project ${r} seeded"        "curl -sk -o /dev/null -w '%{http_code}' https://${GITLAB_HOST}/${GITLAB_GROUP}/${r} | grep -q 200"
   done
-  check "payments devfile has an endpoint" \
-    "curl -sk https://${GITEA_HOST}/${GITEA_ORG}/payments-service/raw/branch/main/devfile.yaml | grep -q 'AI_BASE_URL' && ! curl -sk https://${GITEA_HOST}/${GITEA_ORG}/payments-service/raw/branch/main/devfile.yaml | grep -q 'PLACEHOLDER'"
+  # The devfile must be fetchable at the raw path AND carry a rendered endpoint.
+  check "payments devfile is rendered" \
+    "curl -sk https://${GITLAB_HOST}/${GITLAB_GROUP}/payments-service/-/raw/main/devfile.yaml | grep -q 'AI_BASE_URL' && ! curl -sk https://${GITLAB_HOST}/${GITLAB_GROUP}/payments-service/-/raw/main/devfile.yaml | grep -q 'PLACEHOLDER'"
+
+  banner "Dev Spaces SCM wiring"
+  # Without these two, Dev Spaces cannot resolve a devfile from GitLab and
+  # falls back to offering a default one, which then fails to start.
+  check "GitLab registered in CheCluster" \
+    "oc get checluster devspaces -n ${DEVSPACES_NAMESPACE} -o jsonpath='{.spec.gitServices.gitlab[0].endpoint}' | grep -q '${GITLAB_HOST}'"
+  check "OAuth secret present"         "oc get secret gitlab-oauth-config -n ${DEVSPACES_NAMESPACE}"
+  check "Cluster CA trusted"           "oc get configmap cluster-ca-bundle -n ${DEVSPACES_NAMESPACE}"
 fi
 
 banner "Warming images"

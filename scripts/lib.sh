@@ -39,18 +39,25 @@ load_env() {
   AI_BASE_URL="$(ai_base_url)"
   FREE_GPU="${FREE_GPU:-true}"
   RHDP_SAMPLE_NAMESPACES="${RHDP_SAMPLE_NAMESPACES:-my-first-model}"
-  DEPLOY_GITEA="${DEPLOY_GITEA:-true}"
-  GITEA_ORG="${GITEA_ORG:-platform-engineering}"
-  GITEA_ADMIN_USER="${GITEA_ADMIN_USER:-platform-admin}"
-  GITEA_ADMIN_PASSWORD="${GITEA_ADMIN_PASSWORD:-ChangeMe-PerEnvironment}"
-  GITEA_HOST="${GITEA_HOST:-$(gitea_host)}"
+  DEPLOY_GITLAB="${DEPLOY_GITLAB:-true}"
+  GITLAB_NAMESPACE="${GITLAB_NAMESPACE:-gitlab-system}"
+  GITLAB_GROUP="${GITLAB_GROUP:-platform-engineering}"
+  CLUSTER_APPS_DOMAIN="${CLUSTER_APPS_DOMAIN:-$(cluster_apps_domain)}"
+  GITLAB_HOST="${GITLAB_HOST:-gitlab.${CLUSTER_APPS_DOMAIN}}"
+}
+
+# The cluster's wildcard apps domain. Everything routable hangs off this, and
+# it changes with every environment, so it is discovered rather than configured.
+cluster_apps_domain() {
+  oc get ingresscontroller default -n openshift-ingress-operator \
+    -o jsonpath='{.status.domain}' 2>/dev/null || true
 }
 
 # Route hostname, resolved from the cluster. The Route, not the Service DNS:
 # the browser has to resolve it when creating a workspace, and the workspace
 # pod has to resolve it when cloning. Only the Route satisfies both.
-gitea_host() {
-  oc get route gitea -n "${DEMO_NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || true
+gitlab_host() {
+  oc get route gitlab -n "${GITLAB_NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || true
 }
 
 # The single point of truth for what the workspace talks to. Both backends
@@ -73,8 +80,7 @@ ai_base_url() {
 # Substitute placeholders in a manifest or devfile. Keeps every cluster-specific
 # value in demo.env and nothing in the committed YAML.
 render() {
-  local out
-  out="$(sed \
+  sed \
     -e "s|DEMO_NAMESPACE_PLACEHOLDER|${DEMO_NAMESPACE}|g" \
     -e "s|DEVSPACES_NAMESPACE_PLACEHOLDER|${DEVSPACES_NAMESPACE}|g" \
     -e "s|CHANNEL_PLACEHOLDER|${DEVSPACES_CHANNEL}|g" \
@@ -85,23 +91,12 @@ render() {
     -e "s|AI_MODEL_PLACEHOLDER|${AI_MODEL:-}|g" \
     -e "s|AI_SERVICE_NAME_PLACEHOLDER|${AI_SERVICE_NAME:-}|g" \
     -e "s|AI_BASE_URL_PLACEHOLDER|${AI_BASE_URL:-}|g" \
-    -e "s|VLLM_IMAGE_PLACEHOLDER|${AI_RUNTIME_IMAGE:-}|g" \
-    -e "s|GITEA_HOST_PLACEHOLDER|${GITEA_HOST:-}|g" \
-    -e "s|GITEA_ORG_PLACEHOLDER|${GITEA_ORG:-}|g" \
-    -e "s|GITEA_ADMIN_USER_PLACEHOLDER|${GITEA_ADMIN_USER:-}|g" \
-    -e "s|GITEA_ADMIN_PASSWORD_PLACEHOLDER|${GITEA_ADMIN_PASSWORD:-}|g" \
+    -e "s|GITLAB_HOST_PLACEHOLDER|${GITLAB_HOST:-}|g" \
+    -e "s|GITLAB_NAMESPACE_PLACEHOLDER|${GITLAB_NAMESPACE:-}|g" \
+    -e "s|GITLAB_GROUP_PLACEHOLDER|${GITLAB_GROUP:-}|g" \
+    -e "s|CLUSTER_APPS_DOMAIN_PLACEHOLDER|${CLUSTER_APPS_DOMAIN:-}|g" \
     -e "s|USER_NAMESPACE_PLACEHOLDER|${USER_NAMESPACE:-}|g" \
-    "$1")"
-
-  # Nothing should reach the cluster with a placeholder still in it. An
-  # unsubstituted image name fails an hour later as InvalidImageName, which
-  # reads like a registry problem rather than a scripting one.
-  if grep -q 'PLACEHOLDER' <<< "${out}"; then
-    warn "unsubstituted placeholders in $1:"
-    grep -o '[A-Z_]*PLACEHOLDER' <<< "${out}" | sort -u | sed 's/^/      /' >&2
-    die "refusing to apply. A variable is empty or a render rule is missing."
-  fi
-  echo "${out}"
+    "$1"
 }
 
 wait_for_csv() {
@@ -143,38 +138,13 @@ wait_for_inferenceservice() {
     if [[ "${ready}" == "True" ]]; then
       info "model is serving"; return 0
     fi
-    # A Pending pod alongside a Running one is a stuck rolling update on a
-    # single-GPU cluster, not a failure to start. Say so rather than waiting.
-    if [[ -n "$(oc get pods -n "${ns}" -l component=predictor \
-         --field-selector status.phase=Running -o name 2>/dev/null)" ]] && \
-       [[ -n "$(oc get pods -n "${ns}" -l component=predictor \
-         --field-selector status.phase=Pending -o name 2>/dev/null)" ]]; then
-      warn "an older predictor is serving while a new one waits for the GPU."
-      warn "the model works; the rolling update cannot complete on one GPU."
-      warn "clear the stale ReplicaSet, or set deploymentStrategy Recreate."
-      return 1
-    fi
     sleep 20; elapsed=$((elapsed+20))
     (( elapsed % 60 == 0 )) && info "  still waiting (${elapsed}s)"
   done
-  warn "an older predictor is serving while a new one waits for the GPU."
-  warn "the model works, but the rolling update cannot complete on one GPU."
-  warn "clear the stale ReplicaSet, or set deploymentStrategy Recreate."
-  return 0
-}
-
-# Read the vLLM runtime image from the cluster's own template. RHOAI ships
-# runtime images matched to its version, so discovering beats pinning: a
-# mismatched runtime fails deep in vLLM startup after an 18GB pull.
-discover_vllm_image() {
-  local tmpl img
-  tmpl="$(oc get templates -n "${RHOAI_NAMESPACE}" -o name 2>/dev/null \
-    | grep -i 'vllm-cuda' | head -1)"
-  [[ -n "${tmpl}" ]] || return 1
-  img="$(oc get "${tmpl}" -n "${RHOAI_NAMESPACE}" \
-    -o jsonpath='{.objects[0].spec.containers[0].image}' 2>/dev/null)"
-  [[ -n "${img}" ]] || return 1
-  echo "${img}"
+  warn "InferenceService did not become Ready in ${timeout}s"
+  warn "check: oc get pods -n ${ns} -l component=predictor"
+  warn "fallback: set AI_BACKEND=ollama in demo.env and re-run scripts/up.sh"
+  return 1
 }
 
 # Free the GPU held by known, disposable RHDP sample workloads.
@@ -249,4 +219,26 @@ check_gpu_capacity() {
     warn "AI_BACKEND=ollama in demo.env if you would rather not touch it."
     return 1
   fi
+}
+
+wait_for_gitlab() {
+  local ns="$1" timeout="${2:-2400}" elapsed=0
+  info "waiting for GitLab to reconcile (first run is genuinely slow, 15-25 min)"
+  while (( elapsed < timeout )); do
+    local phase
+    phase="$(oc get gitlab gitlab -n "${ns}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+    if [[ "${phase}" == "Running" ]]; then
+      info "GitLab is Running"; return 0
+    fi
+    # Webservice ready is the practical signal: the CR can lag behind it.
+    if [[ "$(oc get deployment gitlab-webservice-default -n "${ns}" \
+         -o jsonpath='{.status.readyReplicas}' 2>/dev/null)" =~ ^[1-9] ]]; then
+      info "webservice is ready"; return 0
+    fi
+    sleep 30; elapsed=$((elapsed+30))
+    (( elapsed % 120 == 0 )) && info "  still waiting (${elapsed}s, phase: ${phase:-pending})"
+  done
+  warn "GitLab did not come up in ${timeout}s"
+  warn "check: oc get pods -n ${ns}"
+  return 1
 }

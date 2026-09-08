@@ -1,0 +1,63 @@
+---
+# GitLab CE via the operator's cloud-native chart. Not the omnibus image:
+# that runs runit as a supervisor and writes to fixed paths as root, so it
+# cannot start under OpenShift's restricted SCC. The chart runs each component
+# as its own unprivileged container, which is also how a bank would run it.
+#
+# Deliberately trimmed. This exists to host three repositories and issue OAuth
+# tokens, not to be a complete GitLab installation.
+apiVersion: apps.gitlab.com/v1beta1
+kind: GitLab
+metadata:
+  name: gitlab
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+spec:
+  chart:
+    version: "9.3.1"
+    values:
+      global:
+        hosts:
+          domain: CLUSTER_APPS_DOMAIN_PLACEHOLDER
+          https: true
+          gitlab:
+            name: GITLAB_HOST_PLACEHOLDER
+        ingress:
+          # OpenShift Routes handle ingress and TLS termination using the
+          # cluster's wildcard certificate. This avoids cert-manager entirely,
+          # which is one less moving part on a five-day cluster.
+          enabled: false
+          configureCertmanager: false
+          tls:
+            enabled: false
+        # Container registry needs its own subdomain and a lot of storage.
+        # Not needed to host Git repositories.
+        registry:
+          enabled: false
+        appConfig:
+          defaultProjectsFeatures:
+            containerRegistry: false
+        kas:
+          enabled: false
+        # Trimmed: no CI in this demo, so no runner-facing components.
+        shell:
+          enabled: true
+      certmanager:
+        install: false
+      nginx-ingress:
+        enabled: false
+      prometheus:
+        install: false
+      gitlab-runner:
+        install: false
+      registry:
+        enabled: false
+      gitlab:
+        webservice:
+          minReplicas: 1
+          maxReplicas: 1
+        sidekiq:
+          minReplicas: 1
+          maxReplicas: 1
+        gitlab-shell:
+          minReplicas: 1
+          maxReplicas: 1
