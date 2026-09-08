@@ -65,6 +65,11 @@ spec:
   predictor:
     minReplicas: 1
     maxReplicas: 1
+    # One GPU means a rolling update can never complete: the new pod waits for
+    # a GPU the old pod is still holding, and sits Pending indefinitely while
+    # the old one serves happily. Recreate stops that dead.
+    deploymentStrategy:
+      type: Recreate
     model:
       modelFormat:
         name: vLLM

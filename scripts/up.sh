@@ -27,13 +27,24 @@ wait_for_checluster "${DEVSPACES_NAMESPACE}" 900
 
 banner "4b/6  Internal Git (Gitea: ${DEPLOY_GITEA})"
 if [[ "${DEPLOY_GITEA}" == "true" ]]; then
-  # Route first: ROOT_URL needs the hostname, and the hostname only exists
-  # once the Route does. Applying the Deployment first bakes in an empty
-  # ROOT_URL, which Gitea then uses for every clone URL it prints.
-  render "${REPO_ROOT}/overlays/gitea/01-gitea.yaml" \
-    | oc apply -f - --selector='' --dry-run=client -o name >/dev/null 2>&1 || true
-  render "${REPO_ROOT}/overlays/gitea/01-gitea.yaml" | grep -A20 'kind: Route' | oc apply -f - 2>/dev/null || true
+  # Build the OpenShift-compliant image first. The upstream one cannot run
+  # under restricted-v2; images/gitea/Containerfile explains why.
+  render "${REPO_ROOT}/overlays/gitea/00-build.yaml" | oc apply -f -
+  if ! oc get istag gitea-openshift:latest -n "${DEMO_NAMESPACE}" >/dev/null 2>&1; then
+    info "building the Gitea image (first run only, ~2 minutes)"
+    oc start-build gitea-openshift -n "${DEMO_NAMESPACE}" --follow --wait \
+      || die "Gitea image build failed. Logs: oc logs bc/gitea-openshift -n ${DEMO_NAMESPACE}"
+  else
+    info "Gitea image already built"
+  fi
+
+  # Route must exist before we seed, because the workspace URLs are the Route.
+  render "${REPO_ROOT}/overlays/gitea/01-gitea.yaml" | oc apply -f -
+  oc rollout status deployment/gitea -n "${DEMO_NAMESPACE}" --timeout=600s
   GITEA_HOST="$(gitea_host)"
+  [[ -n "${GITEA_HOST}" ]] || die "could not resolve the Gitea route hostname"
+  export GITEA_HOST
+  info "Gitea route: https://${GITEA_HOST}"
 
   # Re-apply so ROOT_URL carries the now-known hostname.
   render "${REPO_ROOT}/overlays/gitea/01-gitea.yaml" | oc apply -f -
@@ -43,6 +54,13 @@ else
   warn "so there will be no repository URLs to create workspaces from."
 fi
 
+info "ensuring the admin user exists"
+oc exec -n "${DEMO_NAMESPACE}" deployment/gitea -- \
+  gitea admin user create \
+    --admin --username "${GITEA_ADMIN_USER}" --password "${GITEA_ADMIN_PASSWORD}" \
+    --email admin@example.internal --must-change-password=false 2>/dev/null \
+  || info "  already exists"
+
 banner "5/6  In-cluster AI model (backend: ${AI_BACKEND})"
 case "${AI_BACKEND}" in
   rhoai)
@@ -50,9 +68,22 @@ case "${AI_BACKEND}" in
     check_gpu_capacity || die "GPU check failed, see the warnings above"
     oc get crd inferenceservices.serving.kserve.io >/dev/null 2>&1 \
       || die "KServe CRDs not found. Is RHOAI installed and the DataScienceCluster reconciled?"
+
+    info "checking ModelCar reference"
+    oc image info "${AI_MODEL_IMAGE#oci://}" >/dev/null 2>&1 \
+      || die "cannot resolve ${AI_MODEL_IMAGE}"
+
+    if [[ -z "${AI_RUNTIME_IMAGE}" ]]; then
+      info "discovering vLLM runtime image from the cluster"
+      AI_RUNTIME_IMAGE="$(discover_vllm_image)" \
+        || die "could not find a vllm-cuda runtime template in ${RHOAI_NAMESPACE}."
+    fi
+    info "vLLM runtime: ${AI_RUNTIME_IMAGE}"
+
     render "${REPO_ROOT}/overlays/rhoai/01-inference-service.yaml" | oc apply -f -
     render "${REPO_ROOT}/overlays/rhoai/02-network-policy.yaml" | oc apply -f -
-    wait_for_inferenceservice "${AI_SERVICE_NAME}" "${DEMO_NAMESPACE}" 1500 || true
+    wait_for_inferenceservice "${AI_SERVICE_NAME}" "${DEMO_NAMESPACE}" 3600 \
+      || warn "model is not serving..."
     ;;
   ollama)
     render "${REPO_ROOT}/overlays/ollama/01-ollama.yaml" | oc apply -f -

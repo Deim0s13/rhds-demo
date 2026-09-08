@@ -1,0 +1,29 @@
+# Gitea, made compliant with OpenShift's restricted SCC.
+#
+# WHY THIS EXISTS, and it is worth using in the demo:
+#
+# Community images assume they own their filesystem. The upstream gitea image
+# runs an s6 supervisor that needs to write to fixed paths; the rootless variant
+# drops s6 but still assumes UID 1000 owns /var/lib/gitea and /etc/gitea.
+#
+# OpenShift's restricted SCC assigns an arbitrary high UID with GID 0. Anything
+# the container writes to must therefore be group-writable. That is the standard
+# OpenShift image convention, and making a community image comply with it is
+# precisely the work a platform team does before publishing an approved image.
+#
+# This is three lines. The point is not that it is hard, it is that somebody has
+# to own doing it, and that every devfile in the estate should reference images
+# that have been through it.
+FROM docker.io/gitea/gitea:1.22-rootless
+
+USER 0
+
+# g=u makes group permissions mirror user permissions, so whatever UID the
+# platform assigns can write as a member of GID 0.
+RUN mkdir -p /var/lib/gitea /etc/gitea /tmp/gitea \
+ && chgrp -R 0 /var/lib/gitea /etc/gitea /tmp/gitea \
+ && chmod -R g=u /var/lib/gitea /etc/gitea /tmp/gitea
+
+# Numeric, not a name. The SCC overrides it anyway, but a numeric USER is what
+# OpenShift expects and what lets the image run unprivileged elsewhere.
+USER 1000

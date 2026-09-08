@@ -53,13 +53,20 @@ spec:
     spec:
       containers:
         - name: gitea
-          image: docker.io/gitea/gitea:1.22
+          # Built in-cluster from images/gitea/Containerfile. The upstream
+          # image cannot run under restricted-v2; see that Containerfile for
+          # the evidence and the reasoning.
+          image: image-registry.openshift-image-registry.svc:5000/DEMO_NAMESPACE_PLACEHOLDER/gitea-openshift:latest
           ports:
             - containerPort: 3000
               name: http
           env:
+            - name: GITEA_WORK_DIR
+              value: /var/lib/gitea
             - name: GITEA__database__DB_TYPE
               value: sqlite3
+            - name: GITEA__database__PATH
+              value: /var/lib/gitea/data/gitea.db
             - name: GITEA__server__ROOT_URL
               value: "https://GITEA_HOST_PLACEHOLDER/"
             - name: GITEA__server__DOMAIN
@@ -82,27 +89,26 @@ spec:
           lifecycle:
             postStart:
               exec:
-                # No su. OpenShift's restricted SCC runs this container as an
-                # arbitrary UID, so there is no git user to switch to and su
-                # fails, which kills the container. Everything here is
-                # best-effort: a failing postStart hook must never take the
-                # pod down, so the whole thing ends in || true.
+                # Gitea only creates an admin through its CLI, and only once.
+                # Idempotent: the second run fails harmlessly because the user
+                # already exists, which is what we want on a pod restart.
                 command:
                   - /bin/sh
                   - -c
                   - |
-                    (
-                      sleep 25
-                      gitea admin user create \
-                        --admin \
-                        --username "${GITEA_ADMIN_USERNAME}" \
-                        --password "${GITEA_ADMIN_PASSWORD}" \
-                        --email admin@example.internal \
-                        --must-change-password=false
-                    ) || true
+                    sleep 20
+                    su git -c "gitea admin user create \
+                      --admin \
+                      --username ${GITEA_ADMIN_USERNAME} \
+                      --password ${GITEA_ADMIN_PASSWORD} \
+                      --email admin@example.internal \
+                      --must-change-password=false" || true
           volumeMounts:
             - name: data
-              mountPath: /data
+              # The rootless image keeps repositories and config here, not
+              # /data. Mounting the PVC over it also guarantees the path is
+              # writable by whatever UID the platform assigns.
+              mountPath: /var/lib/gitea
           resources:
             requests:
               cpu: 200m
