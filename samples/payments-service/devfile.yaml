@@ -20,6 +20,12 @@ components:
       # corporate CA bundle. Platform team owns it: one rebuild on a CVE,
       # not four hundred laptops.
       image: registry.access.redhat.com/ubi9/openjdk-21:latest
+      # The UBI OpenJDK entrypoint expects to launch an application and exits
+      # when there is none. Kubernetes reads that as a crash and restarts it,
+      # so a workspace container needs something that just stays up. The
+      # ansible component already does this; the Java one was missing it.
+      command: ["tail"]
+      args: ["-f", "/dev/null"]
       memoryRequest: 1Gi
       memoryLimit: 4Gi
       cpuRequest: 500m
