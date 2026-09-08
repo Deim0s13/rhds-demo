@@ -4,7 +4,9 @@ Eight minutes. Build it in four passes so the audience watches the shape emerge
 rather than reading a finished file. Talk while you type; the pauses are the
 point.
 
-Target file: `samples/bare-app/devfile.yaml`. It is not in Git on purpose.
+Create a workspace from the `ledger-service` repo in Gitea. It has no devfile on
+purpose, so Dev Spaces gives you a plain workspace and you author the devfile in
+front of the audience.
 
 ## Pass 1, the header and the container (2 min)
 
@@ -57,11 +59,11 @@ changes, that is a pull request."
 ## Pass 3, the endpoint (1 min)
 
 ```yaml
-      endpoints:
-        - name: http-ledger
-          targetPort: 8080
-          exposure: public
-          protocol: https
+endpoints:
+  - name: http-ledger
+    targetPort: 8080
+    exposure: public
+    protocol: https
 ```
 
 Indent this under `container`, alongside `mountSources`.
@@ -70,36 +72,32 @@ Indent this under `container`, alongside `mountSources`.
 control, not a convenience. Set it to `none` and the port exists inside the
 workspace only, which is what you want for a debug port."
 
-## Pass 4, the project (1 min)
+## Pass 4, commit it (1 min)
 
-```yaml
-projects:
-  - name: ledger
-    git:
-      remotes:
-        origin: "https://github.com/<your-org>/rhds-demo.git"
-      checkoutFrom:
-        revision: main
-    subDir: samples/bare-app
-```
+No `projects` block is needed. Dev Spaces clones whichever repository the
+workspace was created from, so the devfile does not name its own remote. Worth
+saying out loud: that is what keeps this file portable. The same devfile works
+against Gitea here, and against their Bitbucket unchanged.
 
-**Say:** "And now anyone with this URL gets this environment. That is the whole
-onboarding process."
+Commit and push it from the workspace terminal.
+
+**Say:** "And now anyone with this repository URL gets this environment. That is
+the whole onboarding process, and it went through review like any other change."
 
 ## Then start it
 
 Dashboard, create workspace from the repo URL, watch it come up, run it, hit the
 endpoint. Roughly 90 seconds if the image is warm, which is why `smoke.sh` exists.
 
-## Then make the registry point (2 min)
+## Then make the catalogue point (2 min)
 
-Open `registry/index.json` beside it.
+Open the Gitea UI beside it, showing the three repos under the
+`platform-engineering` organisation.
 
 **Say:** "What I just did by hand is what a platform team does once, properly,
-and publishes. This is a catalogue of approved stacks. A team wanting a new one
-raises a pull request against this repo. Reviewed by the people accountable for
-it, versioned, auditable. That is the difference between a tool and a platform
-product."
+and publishes. These are approved stacks, owned by an accountable team. A team
+wanting a new one raises a pull request. Reviewed, versioned, auditable. That is
+the difference between a tool and a platform product."
 
 ## The finished file, for paste-in-a-hurry
 
@@ -107,14 +105,6 @@ product."
 schemaVersion: 2.2.0
 metadata:
   name: ledger-service
-projects:
-  - name: ledger
-    git:
-      remotes:
-        origin: "https://github.com/<your-org>/rhds-demo.git"
-      checkoutFrom:
-        revision: main
-    subDir: samples/bare-app
 components:
   - name: tools
     container:
@@ -133,13 +123,14 @@ commands:
       component: tools
       commandLine: "mvn -B clean package -DskipTests"
       workingDir: ${PROJECT_SOURCE}
-      group: {kind: build, isDefault: true}
+      group: { kind: build, isDefault: true }
   - id: run
     exec:
       component: tools
       commandLine: "mvn -B spring-boot:run"
       workingDir: ${PROJECT_SOURCE}
-      group: {kind: run, isDefault: true}
+      group: { kind: run, isDefault: true }
 ```
 
-Run `scripts/reset.sh` afterwards. It deletes this file so the next run starts clean.
+Run `scripts/reset.sh` afterwards, then `scripts/seed-gitea.sh` to force-push
+`ledger-service` back to its devfile-free state for the next run.
