@@ -1,0 +1,48 @@
+    logged in as admin on https://api.ocp.526f7.sandbox2367.opentlc.com:6443
+
+[1;31m==> 1/6  Dev Spaces operator[0m
+subscription.operators.coreos.com/devspaces unchanged
+    waiting for devspaces CSV in openshift-operators
+    operator ready
+
+[1;31m==> 2/6  Namespaces[0m
+namespace/devspaces-demo unchanged
+
+[1;31m==> 3/6  CheCluster[0m
+checluster.org.eclipse.che/devspaces configured
+
+[1;31m==> 4/6  Waiting for Dev Spaces to come up[0m
+    Dev Spaces is Active
+
+[1;31m==> 4b/6  Internal Git (GitLab: true)[0m
+    GitLab will be at https://gitlab.apps.ocp.526f7.sandbox2367.opentlc.com
+namespace/gitlab-system unchanged
+operatorgroup.operators.coreos.com/gitlab-operator unchanged
+subscription.operators.coreos.com/gitlab-operator-kubernetes unchanged
+    waiting for gitlab-operator CSV in gitlab-system
+    operator ready
+gitlab.apps.gitlab.com/gitlab created
+    waiting for GitLab to reconcile (first run is genuinely slow, 15-25 min)
+      still waiting (120s, phase: Preparing)
+      still waiting (240s, phase: Preparing)
+      still waiting (360s, phase: Preparing)
+      still waiting (480s, phase: Preparing)
+      still waiting (600s, phase: Preparing)
+      still waiting (720s, phase: Preparing)
+      still waiting (840s, phase: Preparing)
+      still waiting (960s, phase: Preparing)
+      still waiting (1080s, phase: Preparing)
+      still waiting (1200s, phase: Preparing)
+      still waiting (1320s, phase: Preparing)
+      still waiting (1440s, phase: Preparing)
+      still waiting (1560s, phase: Preparing)
+      still waiting (1680s, phase: Preparing)
+      still waiting (1800s, phase: Preparing)
+      still waiting (1920s, phase: Preparing)
+      still waiting (2040s, phase: Preparing)
+      still waiting (2160s, phase: Preparing)
+      still waiting (2280s, phase: Preparing)
+      still waiting (2400s, phase: Preparing)
+[1;33m    warning: GitLab did not come up in 2400s[0m
+[1;33m    warning: check: oc get pods -n gitlab-system[0m
+[1;31m    error: GitLab did not come up. Check: oc get pods -n gitlab-system[0m

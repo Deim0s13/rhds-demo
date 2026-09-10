@@ -1,0 +1,123 @@
+---
+# PostgreSQL for GitLab. Chart 10.x removed the bundled database, so this is
+# now ours to run. Using the Red Hat PostgreSQL image because it is built for
+# OpenShift: it runs happily as an arbitrary UID, which is exactly the problem
+# the upstream community images have.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-postgresql
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+type: Opaque
+stringData:
+  # The chart reads the GitLab user's password from a secret with this key.
+  password: DB_PASSWORD_PLACEHOLDER
+  # Superuser, needed only to install extensions during bootstrap.
+  postgresql-password: DB_ADMIN_PASSWORD_PLACEHOLDER
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab-postgresql
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+spec:
+  selector:
+    app: gitlab-postgresql
+  ports:
+    - name: postgresql
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: gitlab-postgresql
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+spec:
+  serviceName: gitlab-postgresql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitlab-postgresql
+  template:
+    metadata:
+      labels:
+        app: gitlab-postgresql
+    spec:
+      containers:
+        - name: postgresql
+          image: registry.redhat.io/rhel9/postgresql-16:latest
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRESQL_USER
+              value: gitlab
+            - name: POSTGRESQL_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: gitlab-postgresql, key: password}
+            - name: POSTGRESQL_DATABASE
+              value: gitlabhq_production
+            - name: POSTGRESQL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: gitlab-postgresql, key: postgresql-password}
+            # GitLab needs more connections than the image's default.
+            - name: POSTGRESQL_MAX_CONNECTIONS
+              value: "300"
+            - name: POSTGRESQL_SHARED_BUFFERS
+              value: "256MB"
+          resources:
+            requests: {cpu: 250m, memory: 1Gi}
+            limits: {cpu: "2", memory: 4Gi}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/pgsql/data
+          readinessProbe:
+            exec:
+              command: ["/usr/libexec/check-container"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+---
+# GitLab requires the pg_trgm and btree_gist extensions, which only a superuser
+# can install. The chart used to do this itself with the bundled database; with
+# an external one it is our job.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gitlab-postgresql-extensions
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: psql
+          image: registry.redhat.io/rhel9/postgresql-16:latest
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: {name: gitlab-postgresql, key: postgresql-password}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              until pg_isready -h gitlab-postgresql -U postgres; do
+                echo "waiting for postgres"; sleep 5
+              done
+              for ext in pg_trgm btree_gist plpgsql; do
+                psql -h gitlab-postgresql -U postgres -d gitlabhq_production \
+                  -c "CREATE EXTENSION IF NOT EXISTS ${ext};"
+              done
+              echo "extensions installed"
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}

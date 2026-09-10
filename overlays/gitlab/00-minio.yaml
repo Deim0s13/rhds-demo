@@ -1,0 +1,158 @@
+---
+# S3-compatible object storage. GitLab chart 10.x requires an object storage
+# connection for artifacts, LFS, uploads and packages even when you are not
+# really using them, so this exists to satisfy the chart rather than because
+# the demo needs it.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-minio
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+type: Opaque
+stringData:
+  accesskey: MINIO_ACCESS_KEY_PLACEHOLDER
+  secretkey: MINIO_SECRET_KEY_PLACEHOLDER
+---
+# The Rails side wants its S3 credentials as a YAML document in a single
+# secret key, not as discrete keys. This shape is what the chart expects.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-object-storage
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+type: Opaque
+stringData:
+  config: |
+    provider: AWS
+    region: us-east-1
+    aws_access_key_id: MINIO_ACCESS_KEY_PLACEHOLDER
+    aws_secret_access_key: MINIO_SECRET_KEY_PLACEHOLDER
+    endpoint: 'http://gitlab-minio.GITLAB_NAMESPACE_PLACEHOLDER.svc.cluster.local:9000'
+    path_style: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab-minio
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+spec:
+  selector:
+    app: gitlab-minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitlab-minio-data
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitlab-minio
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: gitlab-minio
+  template:
+    metadata:
+      labels:
+        app: gitlab-minio
+    spec:
+      containers:
+        - name: minio
+          image: quay.io/minio/minio:latest
+          args: ["server", "/data", "--console-address", ":9001"]
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef: { name: gitlab-minio, key: accesskey }
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: gitlab-minio, key: secretkey }
+          resources:
+            requests: { cpu: 100m, memory: 512Mi }
+            limits: { cpu: "1", memory: 2Gi }
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: gitlab-minio-data
+---
+# Buckets have to exist before GitLab starts, or Rails errors on first write.
+#
+# NOTE: this Job is immutable once created. oc apply will silently keep the
+# old spec, so up.sh deletes it before applying. If you change anything here
+# and nothing seems to happen, that is why.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gitlab-minio-buckets
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: quay.io/minio/mc:latest
+          env:
+            - name: ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: gitlab-minio, key: accesskey }
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: gitlab-minio, key: secretkey }
+            # OpenShift assigns an arbitrary UID with no home directory, so
+            # mc resolves $HOME to / and fails trying to create /.mc.
+            # --config-dir below is the real fix; this is belt and braces.
+            - name: HOME
+              value: /tmp
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              until mc --config-dir /tmp/mc alias set gl \
+                    http://gitlab-minio:9000 "${ACCESS_KEY}" "${SECRET_KEY}"; do
+                echo "waiting for minio"; sleep 5
+              done
+              for b in gitlab-artifacts gitlab-lfs gitlab-uploads gitlab-packages \
+                       gitlab-mr-diffs gitlab-terraform-state gitlab-ci-secure-files \
+                       gitlab-dependency-proxy gitlab-pages gitlab-backups gitlab-tmp; do
+                mc --config-dir /tmp/mc mb --ignore-existing "gl/${b}"
+              done
+              echo "buckets ready"
+          volumeMounts:
+            - name: mc-config
+              mountPath: /tmp
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+      volumes:
+        - name: mc-config
+          emptyDir: {}

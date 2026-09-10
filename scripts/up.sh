@@ -30,10 +30,66 @@ if [[ "${DEPLOY_GITLAB}" == "true" ]]; then
   [[ -n "${CLUSTER_APPS_DOMAIN}" ]] || die "could not resolve the cluster apps domain"
   info "GitLab will be at https://${GITLAB_HOST}"
 
+  # Envoy Gateway CRDs FIRST, before the operator Subscription.
+  #
+  # Chart 10.x renders an EnvoyProxy resource even with global.gatewayApi
+  # disabled, so these CRDs must exist or the operator retries forever with
+  # "no matches for kind EnvoyProxy". Two hard-won details:
+  #
+  #   --server-side is required. The EnvoyProxy CRD schema exceeds the 256KB
+  #   limit on the last-applied-configuration annotation that client-side
+  #   apply writes, and fails with "metadata.annotations: Too long".
+  #
+  #   Order matters. The operator caches API discovery at startup, so a
+  #   controller that starts before these CRDs exist never notices them.
+  #   Installing first avoids needing to restart it later.
+  #
+  # The Gateway API CRD rejections in the output are expected and harmless:
+  # OpenShift's Ingress Operator owns those and refuses modification.
+  info "installing Envoy Gateway CRDs"
+  oc apply --server-side \
+    -f https://github.com/envoyproxy/gateway/releases/download/v1.2.1/install.yaml \
+    2>/dev/null || true
+  oc wait --for condition=established --timeout=180s \
+    crd/envoyproxies.gateway.envoyproxy.io \
+    || die "EnvoyProxy CRD did not establish. Without it the GitLab operator
+    cannot reconcile. Check: oc get crd | grep envoyproxy"
+
   render "${REPO_ROOT}/overlays/gitlab/01-operator.yaml" | oc apply -f -
   wait_for_csv "gitlab-operator" "${GITLAB_NAMESPACE}" 900
 
+  # Chart 10.x requires external PostgreSQL, Redis and object storage. These
+  # are ours to run now, which is closer to how a bank would deploy it anyway.
+  info "deploying GitLab dependencies"
+  render "${REPO_ROOT}/overlays/gitlab/00-postgres.yaml" | oc apply -f -
+  render "${REPO_ROOT}/overlays/gitlab/00-redis.yaml" | oc apply -f -
+  render "${REPO_ROOT}/overlays/gitlab/00-minio.yaml" | oc apply -f -
+
+  oc rollout status statefulset/gitlab-postgresql -n "${GITLAB_NAMESPACE}" --timeout=600s
+  oc rollout status deployment/gitlab-redis -n "${GITLAB_NAMESPACE}" --timeout=600s
+  oc rollout status deployment/gitlab-minio -n "${GITLAB_NAMESPACE}" --timeout=600s
+
+  info "waiting for extensions and buckets"
+  oc wait --for=condition=complete job/gitlab-postgresql-extensions \
+    -n "${GITLAB_NAMESPACE}" --timeout=300s \
+    || { oc logs job/gitlab-postgresql-extensions -n "${GITLAB_NAMESPACE}" --tail=20 || true
+         die "PostgreSQL extension setup failed"; }
+  oc wait --for=condition=complete job/gitlab-minio-buckets \
+    -n "${GITLAB_NAMESPACE}" --timeout=300s \
+    || { oc logs job/gitlab-minio-buckets -n "${GITLAB_NAMESPACE}" --tail=20 || true
+         die "MinIO bucket creation failed"; }
+
   render "${REPO_ROOT}/overlays/gitlab/02-gitlab.yaml" | oc apply -f -
+
+  # Belt and braces. The CRDs are installed before the operator above, so its
+  # discovery cache should already be warm, but a controller that started at
+  # any point before them will loop on "no matches for kind" forever and give
+  # no clue why. Ten seconds here is cheaper than an afternoon.
+  info "cycling the operator to refresh its API discovery cache"
+  oc delete pod -n "${GITLAB_NAMESPACE}" -l control-plane=controller-manager \
+    --ignore-not-found >/dev/null 2>&1 || true
+  sleep 20
+
   wait_for_gitlab "${GITLAB_NAMESPACE}" 2400 \
     || die "GitLab did not come up. Check: oc get pods -n ${GITLAB_NAMESPACE}"
 

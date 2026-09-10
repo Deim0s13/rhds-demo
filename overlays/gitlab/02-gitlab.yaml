@@ -1,11 +1,15 @@
 ---
-# GitLab CE via the operator's cloud-native chart. Not the omnibus image:
-# that runs runit as a supervisor and writes to fixed paths as root, so it
-# cannot start under OpenShift's restricted SCC. The chart runs each component
-# as its own unprivileged container, which is also how a bank would run it.
+# GitLab CE via the certified operator, using the cloud-native chart.
 #
-# Deliberately trimmed. This exists to host three repositories and issue OAuth
-# tokens, not to be a complete GitLab installation.
+# NOT the omnibus image. Omnibus runs a full init system and expects to own the
+# machine: it writes to /etc/ssh, /var/opt/gitlab and elsewhere as a fixed user,
+# so it cannot start under OpenShift's restricted SCC. Each path you mount over
+# reveals another. The chart runs each component as its own unprivileged
+# container, which is also how a bank would actually run it.
+#
+# Chart 10.x removed the bundled PostgreSQL, Redis and object storage, so those
+# are supplied by the 00-* manifests alongside this one. That is a fair
+# reflection of reality: no bank runs its SCM's database as a chart subchart.
 apiVersion: apps.gitlab.com/v1beta1
 kind: GitLab
 metadata:
@@ -13,44 +17,110 @@ metadata:
   namespace: GITLAB_NAMESPACE_PLACEHOLDER
 spec:
   chart:
-    version: "9.3.1"
+    # The operator accepts only the chart versions it ships. It rejects
+    # anything else at admission and lists the valid ones in the error.
+    version: "GITLAB_CHART_VERSION_PLACEHOLDER"
     values:
       global:
+        edition: ce
         hosts:
           domain: CLUSTER_APPS_DOMAIN_PLACEHOLDER
           https: true
           gitlab:
             name: GITLAB_HOST_PLACEHOLDER
         ingress:
-          # OpenShift Routes handle ingress and TLS termination using the
-          # cluster's wildcard certificate. This avoids cert-manager entirely,
-          # which is one less moving part on a five-day cluster.
+          # OpenShift Routes handle ingress and TLS with the cluster's wildcard
+          # certificate, so cert-manager is not needed. See 03-route.yaml.
           enabled: false
           configureCertmanager: false
           tls:
             enabled: false
-        # Container registry needs its own subdomain and a lot of storage.
-        # Not needed to host Git repositories.
+
+          # Chart 10.x renders Gateway API resources including an EnvoyProxy,
+          # which needs Envoy Gateway's CRDs. Not installed here, and not needed:
+          # OpenShift Routes handle ingress. Without this the operator retries
+          # forever with "no matches for kind EnvoyProxy".
+          gatewayApi:
+            enabled: false
+            installEnvoy: false
+            configureCertmanager: false
+
+        psql:
+          host: gitlab-postgresql.GITLAB_NAMESPACE_PLACEHOLDER.svc.cluster.local
+          port: 5432
+          database: gitlabhq_production
+          username: gitlab
+          password:
+            secret: gitlab-postgresql
+            key: password
+
+        redis:
+          host: gitlab-redis.GITLAB_NAMESPACE_PLACEHOLDER.svc.cluster.local
+          port: 6379
+          auth:
+            enabled: true
+            secret: gitlab-redis
+            key: password
+
+        # Every one of these needs a connection or the chart refuses to render,
+        # even though this demo never writes an artifact.
+        appConfig:
+          object_store:
+            enabled: true
+            proxy_download: true
+            connection:
+              secret: gitlab-object-storage
+              key: config
+          artifacts:
+            bucket: gitlab-artifacts
+          lfs:
+            bucket: gitlab-lfs
+          uploads:
+            bucket: gitlab-uploads
+          packages:
+            bucket: gitlab-packages
+          externalDiffs:
+            bucket: gitlab-mr-diffs
+          terraformState:
+            bucket: gitlab-terraform-state
+          ciSecureFiles:
+            bucket: gitlab-ci-secure-files
+          dependencyProxy:
+            bucket: gitlab-dependency-proxy
+          backups:
+            bucket: gitlab-backups
+            tmpBucket: gitlab-tmp
+
         registry:
           enabled: false
-        appConfig:
-          defaultProjectsFeatures:
-            containerRegistry: false
         kas:
           enabled: false
-        # Trimmed: no CI in this demo, so no runner-facing components.
+        pages:
+          enabled: false
         shell:
           enabled: true
+
+      # Trimmed. This hosts three repositories and issues OAuth tokens; it does
+      # not need to be a complete GitLab installation.
       certmanager:
         install: false
       nginx-ingress:
         enabled: false
       prometheus:
         install: false
+      grafana:
+        enabled: false
       gitlab-runner:
         install: false
       registry:
         enabled: false
+      minio:
+        install: false
+      postgresql:
+        install: false
+      redis:
+        install: false
+
       gitlab:
         webservice:
           minReplicas: 1
@@ -61,3 +131,5 @@ spec:
         gitlab-shell:
           minReplicas: 1
           maxReplicas: 1
+        toolbox:
+          enabled: true
