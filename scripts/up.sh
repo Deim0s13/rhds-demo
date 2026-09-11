@@ -110,9 +110,20 @@ case "${AI_BACKEND}" in
     check_gpu_capacity || die "GPU check failed, see the warnings above"
     oc get crd inferenceservices.serving.kserve.io >/dev/null 2>&1 \
       || die "KServe CRDs not found. Is RHOAI installed and the DataScienceCluster reconciled?"
+    # The runtime image must come from this cluster's own template. RHOAI
+    # ships images matched to its version; a pinned guess fails deep inside
+    # vLLM startup after an 18GB pull.
+    if [[ -z "${AI_RUNTIME_IMAGE}" ]]; then
+      info "discovering vLLM runtime image from the cluster"
+      AI_RUNTIME_IMAGE="$(discover_vllm_image)" \
+        || die "could not find a vllm-cuda runtime template in ${RHOAI_NAMESPACE}.
+    Set AI_RUNTIME_IMAGE in demo.env explicitly, or check RHOAI is installed."
+    fi
+    info "vLLM runtime: ${AI_RUNTIME_IMAGE}"
+
     render "${REPO_ROOT}/overlays/rhoai/01-inference-service.yaml" | oc apply -f -
     render "${REPO_ROOT}/overlays/rhoai/02-network-policy.yaml" | oc apply -f -
-    wait_for_inferenceservice "${AI_SERVICE_NAME}" "${DEMO_NAMESPACE}" 1500 || true
+    wait_for_inferenceservice "${AI_SERVICE_NAME}" "${DEMO_NAMESPACE}" 3600 || true
     ;;
   ollama)
     render "${REPO_ROOT}/overlays/ollama/01-ollama.yaml" | oc apply -f -

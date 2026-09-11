@@ -37,6 +37,8 @@ load_env() {
   esac
   [[ "${AI_BACKEND}" == "rhoai" ]] && : "${AI_MODEL_IMAGE:?AI_MODEL_IMAGE is required when AI_BACKEND=rhoai}"
   AI_BASE_URL="$(ai_base_url)"
+  # Empty means discover from the cluster's own vllm-cuda-runtime-template.
+  AI_RUNTIME_IMAGE="${AI_RUNTIME_IMAGE:-}"
   FREE_GPU="${FREE_GPU:-true}"
   RHDP_SAMPLE_NAMESPACES="${RHDP_SAMPLE_NAMESPACES:-my-first-model}"
   DEPLOY_GITLAB="${DEPLOY_GITLAB:-true}"
@@ -107,8 +109,11 @@ ai_base_url() {
 
 # Substitute placeholders in a manifest or devfile. Keeps every cluster-specific
 # value in demo.env and nothing in the committed YAML.
+# Substitute placeholders in a manifest. Keeps every cluster-specific value in
+# demo.env (or discovered at runtime) and nothing in the committed YAML.
 render() {
-  sed \
+  local out
+  out="$(sed \
     -e "s|DEMO_NAMESPACE_PLACEHOLDER|${DEMO_NAMESPACE}|g" \
     -e "s|DEVSPACES_NAMESPACE_PLACEHOLDER|${DEVSPACES_NAMESPACE}|g" \
     -e "s|CHANNEL_PLACEHOLDER|${DEVSPACES_CHANNEL}|g" \
@@ -119,6 +124,7 @@ render() {
     -e "s|AI_MODEL_PLACEHOLDER|${AI_MODEL:-}|g" \
     -e "s|AI_SERVICE_NAME_PLACEHOLDER|${AI_SERVICE_NAME:-}|g" \
     -e "s|AI_BASE_URL_PLACEHOLDER|${AI_BASE_URL:-}|g" \
+    -e "s|VLLM_IMAGE_PLACEHOLDER|${AI_RUNTIME_IMAGE:-}|g" \
     -e "s|GITLAB_HOST_PLACEHOLDER|${GITLAB_HOST:-}|g" \
     -e "s|GITLAB_NAMESPACE_PLACEHOLDER|${GITLAB_NAMESPACE:-}|g" \
     -e "s|GITLAB_GROUP_PLACEHOLDER|${GITLAB_GROUP:-}|g" \
@@ -130,7 +136,17 @@ render() {
     -e "s|MINIO_ACCESS_KEY_PLACEHOLDER|${MINIO_ACCESS_KEY:-}|g" \
     -e "s|MINIO_SECRET_KEY_PLACEHOLDER|${MINIO_SECRET_KEY:-}|g" \
     -e "s|USER_NAMESPACE_PLACEHOLDER|${USER_NAMESPACE:-}|g" \
-    "$1"
+    "$1")"
+
+  # Nothing should reach the cluster with a placeholder still in it. An
+  # unsubstituted image name fails much later as InvalidImageName, which reads
+  # like a registry problem rather than a scripting one, and costs an hour.
+  if grep -q 'PLACEHOLDER' <<< "${out}"; then
+    warn "unsubstituted placeholders in $1:"
+    grep -o '[A-Z_]*PLACEHOLDER' <<< "${out}" | sort -u | sed 's/^/      /' >&2
+    die "refusing to apply. A variable is empty or a render rule is missing."
+  fi
+  echo "${out}"
 }
 
 wait_for_csv() {
@@ -188,6 +204,21 @@ wait_for_inferenceservice() {
 # this script's job: it has to stay safe to run anywhere, including on a shared
 # or customer cluster. Anything not on the list produces a warning and nothing
 # else. Set FREE_GPU=false to disable and warn only.
+# Read the vLLM runtime image from the cluster's own template. RHOAI ships
+# runtime images matched to its version, so discovering beats pinning: a
+# mismatched runtime fails deep inside vLLM startup, after an 18GB pull, with
+# an error that reads like a model problem rather than a version problem.
+discover_vllm_image() {
+  local tmpl img
+  tmpl="$(oc get templates -n "${RHOAI_NAMESPACE}" -o name 2>/dev/null \
+    | grep -i 'vllm-cuda' | head -1)"
+  [[ -n "${tmpl}" ]] || return 1
+  img="$(oc get "${tmpl}" -n "${RHOAI_NAMESPACE}" \
+    -o jsonpath='{.objects[0].spec.containers[0].image}' 2>/dev/null)"
+  [[ -n "${img}" ]] || return 1
+  echo "${img}"
+}
+
 free_gpu_if_safe() {
   local holders holder
   holders="$(oc get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\t"}{.spec.containers[*].resources.requests.nvidia\.com/gpu}{"\n"}{end}' 2>/dev/null \

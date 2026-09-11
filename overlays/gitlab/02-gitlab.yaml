@@ -23,11 +23,13 @@ spec:
     values:
       global:
         edition: ce
+
         hosts:
           domain: CLUSTER_APPS_DOMAIN_PLACEHOLDER
           https: true
           gitlab:
             name: GITLAB_HOST_PLACEHOLDER
+
         ingress:
           # OpenShift Routes handle ingress and TLS with the cluster's wildcard
           # certificate, so cert-manager is not needed. See 03-route.yaml.
@@ -36,14 +38,25 @@ spec:
           tls:
             enabled: false
 
-          # Chart 10.x renders Gateway API resources including an EnvoyProxy,
-          # which needs Envoy Gateway's CRDs. Not installed here, and not needed:
-          # OpenShift Routes handle ingress. Without this the operator retries
-          # forever with "no matches for kind EnvoyProxy".
-          gatewayApi:
-            enabled: false
-            installEnvoy: false
-            configureCertmanager: false
+        # MUST be a sibling of ingress, not nested inside it. Nesting it renders
+        # global.ingress.gatewayApi, which the chart silently ignores, and the
+        # operator then loops forever on missing kinds with no clue why.
+        #
+        # Chart 10.x renders Gateway API resources: an EnvoyProxy (needs Envoy
+        # Gateway's CRDs) and a TCPRoute (an experimental-channel Gateway API
+        # CRD that OpenShift's Ingress Operator will not permit installing).
+        # Both are unnecessary here because Routes handle ingress.
+        #
+        # Verify this landed correctly before applying:
+        #   bash -c 'source scripts/lib.sh; load_env; \
+        #     render overlays/gitlab/02-gitlab.yaml' | python3 -c \
+        #     "import yaml,sys; print(list(yaml.safe_load(sys.stdin)\
+        #     ['spec']['chart']['values']['global'].keys()))"
+        # gatewayApi must appear in that list.
+        gatewayApi:
+          enabled: false
+          installEnvoy: false
+          configureCertmanager: false
 
         psql:
           host: gitlab-postgresql.GITLAB_NAMESPACE_PLACEHOLDER.svc.cluster.local
@@ -63,7 +76,8 @@ spec:
             key: password
 
         # Every one of these needs a connection or the chart refuses to render,
-        # even though this demo never writes an artifact.
+        # even though this demo never writes an artefact. Note the key is
+        # "config", not "connection": that is what GitLab's own examples use.
         appConfig:
           object_store:
             enabled: true
