@@ -1,0 +1,133 @@
+apiVersion: apps.gitlab.com/v1beta1
+kind: GitLab
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"apps.gitlab.com/v1beta1","kind":"GitLab","metadata":{"annotations":{},"name":"gitlab","namespace":"gitlab-system"},"spec":{"chart":{"values":{"certmanager":{"install":false},"gitlab":{"gitlab-shell":{"maxReplicas":1,"minReplicas":1},"sidekiq":{"maxReplicas":1,"minReplicas":1},"toolbox":{"enabled":true},"webservice":{"maxReplicas":1,"minReplicas":1}},"gitlab-runner":{"install":false},"global":{"appConfig":{"artifacts":{"bucket":"gitlab-artifacts"},"backups":{"bucket":"gitlab-backups","tmpBucket":"gitlab-tmp"},"ciSecureFiles":{"bucket":"gitlab-ci-secure-files"},"dependencyProxy":{"bucket":"gitlab-dependency-proxy"},"externalDiffs":{"bucket":"gitlab-mr-diffs"},"lfs":{"bucket":"gitlab-lfs"},"object_store":{"connection":{"key":"config","secret":"gitlab-object-storage"},"enabled":true,"proxy_download":true},"packages":{"bucket":"gitlab-packages"},"terraformState":{"bucket":"gitlab-terraform-state"},"uploads":{"bucket":"gitlab-uploads"}},"edition":"ce","gatewayApi":{"configureCertmanager":false,"enabled":false,"installEnvoy":false},"hosts":{"domain":"apps.ocp.mhpzn.sandbox671.opentlc.com","gitlab":{"name":"gitlab.apps.ocp.mhpzn.sandbox671.opentlc.com"},"https":true},"ingress":{"configureCertmanager":false,"enabled":false,"tls":{"enabled":false}},"kas":{"enabled":false},"pages":{"enabled":false},"psql":{"database":"gitlabhq_production","host":"gitlab-postgresql.gitlab-system.svc.cluster.local","password":{"key":"password","secret":"gitlab-postgresql"},"port":5432,"username":"gitlab"},"redis":{"auth":{"enabled":true,"key":"password","secret":"gitlab-redis"},"host":"gitlab-redis.gitlab-system.svc.cluster.local","port":6379},"registry":{"enabled":false},"shell":{"enabled":true}},"grafana":{"enabled":false},"minio":{"install":false},"nginx-ingress":{"enabled":false},"postgresql":{"install":false},"prometheus":{"install":false},"redis":{"install":false},"registry":{"enabled":false}},"version":"10.3.1"}}}
+  creationTimestamp: "2026-09-11T02:57:51Z"
+  generation: 1
+  name: gitlab
+  namespace: gitlab-system
+  resourceVersion: "301859"
+  uid: 5da0dc16-e270-4007-9dda-7d705b828671
+spec:
+  chart:
+    values:
+      certmanager:
+        install: false
+      gitlab:
+        gitlab-shell:
+          maxReplicas: 1
+          minReplicas: 1
+        sidekiq:
+          maxReplicas: 1
+          minReplicas: 1
+        toolbox:
+          enabled: true
+        webservice:
+          maxReplicas: 1
+          minReplicas: 1
+      gitlab-runner:
+        install: false
+      global:
+        appConfig:
+          artifacts:
+            bucket: gitlab-artifacts
+          backups:
+            bucket: gitlab-backups
+            tmpBucket: gitlab-tmp
+          ciSecureFiles:
+            bucket: gitlab-ci-secure-files
+          dependencyProxy:
+            bucket: gitlab-dependency-proxy
+          externalDiffs:
+            bucket: gitlab-mr-diffs
+          lfs:
+            bucket: gitlab-lfs
+          object_store:
+            connection:
+              key: config
+              secret: gitlab-object-storage
+            enabled: true
+            proxy_download: true
+          packages:
+            bucket: gitlab-packages
+          terraformState:
+            bucket: gitlab-terraform-state
+          uploads:
+            bucket: gitlab-uploads
+        edition: ce
+        gatewayApi:
+          configureCertmanager: false
+          enabled: false
+          installEnvoy: false
+        hosts:
+          domain: apps.ocp.mhpzn.sandbox671.opentlc.com
+          gitlab:
+            name: gitlab.apps.ocp.mhpzn.sandbox671.opentlc.com
+          https: true
+        ingress:
+          configureCertmanager: false
+          enabled: false
+          tls:
+            enabled: false
+        kas:
+          enabled: false
+        pages:
+          enabled: false
+        psql:
+          database: gitlabhq_production
+          host: gitlab-postgresql.gitlab-system.svc.cluster.local
+          password:
+            key: password
+            secret: gitlab-postgresql
+          port: 5432
+          username: gitlab
+        redis:
+          auth:
+            enabled: true
+            key: password
+            secret: gitlab-redis
+          host: gitlab-redis.gitlab-system.svc.cluster.local
+          port: 6379
+        registry:
+          enabled: false
+        shell:
+          enabled: true
+      grafana:
+        enabled: false
+      minio:
+        install: false
+      nginx-ingress:
+        enabled: false
+      postgresql:
+        install: false
+      prometheus:
+        install: false
+      redis:
+        install: false
+      registry:
+        enabled: false
+    version: 10.3.1
+status:
+  conditions:
+  - lastTransitionTime: "2026-09-11T03:45:20Z"
+    message: GitLab is initialized
+    observedGeneration: 1
+    reason: Initialized
+    status: "True"
+    type: Initialized
+  - lastTransitionTime: "2026-09-11T03:45:23Z"
+    message: GitLab is running and available to accept requests
+    observedGeneration: 1
+    reason: Available
+    status: "True"
+    type: Available
+  - lastTransitionTime: "2026-09-11T02:58:27Z"
+    message: GitLab is not currently upgrading
+    observedGeneration: 1
+    reason: Upgrading
+    status: "False"
+    type: Upgrading
+  phase: Running
+  version: 10.3.1
