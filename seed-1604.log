@@ -1,0 +1,5 @@
+    logged in as admin on https://api.ocp.mhpzn.sandbox671.opentlc.com:6443
+
+[1;31m==> Seeding https://gitlab.apps.ocp.mhpzn.sandbox671.opentlc.com[0m
+    reading the initial root password
+    minting an API token via the toolbox pod

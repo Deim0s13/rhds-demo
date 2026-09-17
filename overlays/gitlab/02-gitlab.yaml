@@ -145,5 +145,10 @@ spec:
         gitlab-shell:
           minReplicas: 1
           maxReplicas: 1
-        toolbox:
-          enabled: true
+      toolbox:
+        enabled: true
+        backups:
+          objectStorage:
+            config:
+              secret: gitlab-s3cmd-config
+              key: config

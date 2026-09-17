@@ -17,33 +17,48 @@ CURL="curl -fsSk"
 banner "Seeding ${BASE}"
 
 # --- credentials ------------------------------------------------------------
-info "reading the initial root password"
-ROOT_PASSWORD="$(oc get secret gitlab-gitlab-initial-root-password \
-  -n "${GITLAB_NAMESPACE}" -o jsonpath='{.data.password}' 2>/dev/null | base64 -d)"
-[[ -n "${ROOT_PASSWORD}" ]] || die "could not read the root password secret.
-    Is GitLab finished reconciling? oc get gitlab -n ${GITLAB_NAMESPACE}"
+# A token can come from two places. Prefer one supplied in the environment:
+# it removes any dependency on the toolbox pod, which exists for backups and
+# rails access and is not otherwise needed by this demo.
+#
+#   Mint one at ${BASE}/-/user_settings/personal_access_tokens
+#   Scopes: api, write_repository
+#   Then:   export GITLAB_TOKEN=<token> && ./scripts/seed-gitlab.sh
+#
+# Falling back to the toolbox is convenient on a clean cluster, but it is the
+# component most likely to be crashlooping, and when it is the failure looks
+# like a seeding problem rather than a toolbox one.
+if [[ -n "${GITLAB_TOKEN:-}" ]]; then
+  info "using GITLAB_TOKEN from the environment"
+  TOKEN="${GITLAB_TOKEN}"
+else
+  info "no GITLAB_TOKEN set, trying the toolbox pod"
+  TOOLBOX="$(oc get pods -n "${GITLAB_NAMESPACE}" -l app=toolbox \
+    --field-selector=status.phase=Running -o name 2>/dev/null | head -1)"
+  [[ -n "${TOOLBOX}" ]] || die "no running toolbox pod, and GITLAB_TOKEN is not set.
 
-# The API needs a token, and a token can only be minted from inside GitLab.
-# The toolbox pod ships a rails console for exactly this kind of bootstrap.
-info "minting an API token via the toolbox pod"
-TOOLBOX="$(oc get pods -n "${GITLAB_NAMESPACE}" -l app=toolbox -o name | head -1)"
-[[ -n "${TOOLBOX}" ]] || die "toolbox pod not found. Has GitLab finished starting?"
+    Mint a token in the UI instead:
+      ${BASE}/-/user_settings/personal_access_tokens
+      scopes: api, write_repository
 
-TOKEN="$(oc exec -n "${GITLAB_NAMESPACE}" "${TOOLBOX}" -- \
-  gitlab-rails runner "
-    u = User.find_by_username('root')
-    t = u.personal_access_tokens.find_by(name: 'demo-seed') ||
-        u.personal_access_tokens.create!(
-          name: 'demo-seed',
-          scopes: ['api','write_repository'],
-          expires_at: 90.days.from_now)
-    t.set_token('DEMO_SEED_TOKEN_PLACEHOLDER_VALUE') if t.token.blank?
-    t.save!
-    puts t.token
-  " 2>/dev/null | tail -1 | tr -d '\r')"
+    Root password:
+      oc get secret gitlab-gitlab-initial-root-password -n ${GITLAB_NAMESPACE} \\
+        -o jsonpath='{.data.password}' | base64 -d
 
-[[ -n "${TOKEN}" ]] || die "could not mint an API token.
-    Try manually: oc exec -n ${GITLAB_NAMESPACE} ${TOOLBOX} -- gitlab-rails console"
+    Then: export GITLAB_TOKEN=<token> && ./scripts/seed-gitlab.sh"
+
+  TOKEN="$(oc exec -n "${GITLAB_NAMESPACE}" "${TOOLBOX}" -- \
+    gitlab-rails runner "
+      u = User.find_by_username('root')
+      t = u.personal_access_tokens.find_by(name: 'demo-seed') ||
+          u.personal_access_tokens.create!(
+            name: 'demo-seed',
+            scopes: ['api','write_repository'],
+            expires_at: 90.days.from_now)
+      puts t.token
+    " 2>/dev/null | tail -1 | tr -d '\r')"
+  [[ -n "${TOKEN}" ]] || die "toolbox token mint failed. Use GITLAB_TOKEN instead."
+fi
 
 API="${BASE}/api/v4"
 AUTH="-H PRIVATE-TOKEN:${TOKEN}"

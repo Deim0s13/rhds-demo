@@ -156,3 +156,23 @@ spec:
       volumes:
         - name: mc-config
           emptyDir: {}
+
+---
+# The toolbox expects s3cmd-format config, not the Rails YAML in
+# gitlab-object-storage. Without it the toolbox crashloops on a missing
+# /etc/gitlab/.s3cfg, which takes rails console and seeding down with it.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitlab-s3cmd-config
+  namespace: GITLAB_NAMESPACE_PLACEHOLDER
+type: Opaque
+stringData:
+  config: |
+    [default]
+    access_key = MINIO_ACCESS_KEY_PLACEHOLDER
+    secret_key = MINIO_SECRET_KEY_PLACEHOLDER
+    bucket_location = us-east-1
+    host_base = gitlab-minio.GITLAB_NAMESPACE_PLACEHOLDER.svc.cluster.local:9000
+    host_bucket = gitlab-minio.GITLAB_NAMESPACE_PLACEHOLDER.svc.cluster.local:9000/%(bucket)
+    use_https = False
