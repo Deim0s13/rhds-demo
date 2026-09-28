@@ -16,7 +16,6 @@ source "${REPO_ROOT}/scripts/lib.sh"
 load_env
 require oc
 require_login
-assert_provisioned_cluster
 
 banner "1/6  Dev Spaces operator"
 render "${REPO_ROOT}/bootstrap/01-operator.yaml" | oc apply -f -
@@ -73,7 +72,6 @@ if [[ "${DEPLOY_GITLAB}" == "true" ]]; then
   # Jobs are immutable. oc apply silently keeps the old spec, so a fixed Job
   # appears not to have changed. Delete BEFORE applying, not after.
   oc delete job gitlab-postgresql-extensions -n "${GITLAB_NAMESPACE}" --ignore-not-found --wait=true
-  oc delete job gitlab-s3-buckets -n "${GITLAB_NAMESPACE}" --ignore-not-found --wait=true
 
   render "${REPO_ROOT}/overlays/gitlab/00-postgres.yaml"  | oc apply -f -
   render "${REPO_ROOT}/overlays/gitlab/00-redis.yaml"     | oc apply -f -
@@ -83,15 +81,30 @@ if [[ "${DEPLOY_GITLAB}" == "true" ]]; then
   oc rollout status deployment/gitlab-redis       -n "${GITLAB_NAMESPACE}" --timeout=600s
   oc rollout status deployment/gitlab-seaweedfs   -n "${GITLAB_NAMESPACE}" --timeout=600s
 
-  info "waiting for extensions and buckets"
+  info "waiting for PostgreSQL extensions"
   oc wait --for=condition=complete job/gitlab-postgresql-extensions \
     -n "${GITLAB_NAMESPACE}" --timeout=300s \
     || { oc logs job/gitlab-postgresql-extensions -n "${GITLAB_NAMESPACE}" --tail=20 || true
          die "PostgreSQL extension setup failed"; }
-  oc wait --for=condition=complete job/gitlab-s3-buckets \
-    -n "${GITLAB_NAMESPACE}" --timeout=300s \
-    || { oc logs job/gitlab-s3-buckets -n "${GITLAB_NAMESPACE}" --tail=30 || true
-         die "bucket creation failed"; }
+
+  # Buckets created by exec into the running pod rather than a separate Job.
+  # weed shell is an interactive tool. Piping a command to it works from inside
+  # the SeaweedFS pod, but from another pod it hung indefinitely on the master
+  # address, and a Job without activeDeadlineSeconds hangs up.sh with it.
+  info "creating object storage buckets"
+  for b in gitlab-artifacts gitlab-lfs gitlab-uploads gitlab-packages \
+           gitlab-mr-diffs gitlab-terraform-state gitlab-ci-secure-files \
+           gitlab-dependency-proxy gitlab-pages gitlab-backups gitlab-tmp; do
+    oc exec -n "${GITLAB_NAMESPACE}" deployment/gitlab-seaweedfs -- sh -c \
+      "echo 's3.bucket.create -name ${b}' | timeout 20 weed shell -master=localhost:9333" \
+      >/dev/null 2>&1 || warn "  could not create bucket ${b}"
+  done
+  # Print what actually exists. A silent failure then shows on screen rather
+  # than being assumed from an exit code.
+  info "buckets present:"
+  oc exec -n "${GITLAB_NAMESPACE}" deployment/gitlab-seaweedfs -- sh -c \
+    "echo 's3.bucket.list' | timeout 20 weed shell -master=localhost:9333" \
+    2>/dev/null | sed 's/^/      /' || warn "  could not list buckets"
 
   render "${REPO_ROOT}/overlays/gitlab/02-gitlab.yaml" | oc apply -f -
 
