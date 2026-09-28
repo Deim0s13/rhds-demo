@@ -5,4 +5,11 @@ target/
 .cache/
 samples/bare-app/devfile.yaml
 .demo-secrets
-.demo-secrets
+.demo-state
+up-*.log
+seed-*.log
+*.lo
+up-*.log
+seed-*.log
+*.log
+.demo-state

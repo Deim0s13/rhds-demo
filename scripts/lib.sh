@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Shared helpers. Sourced, not executed.
+#
+# EVERYTHING BELOW MUST LIVE INSIDE A FUNCTION. A bare statement here runs on
+# every source, which broke every script in the repo once already with an
+# "unbound variable" error that looked like a cluster problem.
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
@@ -14,8 +18,11 @@ require() {
 
 require_login() {
   oc whoami >/dev/null 2>&1 || die "not logged in. Run: oc login --token=... --server=..."
-  info "logged in as $(oc whoami) on $(oc whoami --show-server)"
+  CURRENT_SERVER="$(oc whoami --show-server)"
+  info "logged in as $(oc whoami) on ${CURRENT_SERVER}"
 }
+
+# --- configuration ----------------------------------------------------------
 
 load_env() {
   if [[ -f "${REPO_ROOT}/demo.env" ]]; then
@@ -24,44 +31,85 @@ load_env() {
   else
     die "demo.env not found. Copy demo.env.example to demo.env and edit it."
   fi
+
   : "${DEMO_NAMESPACE:?}" "${DEVSPACES_NAMESPACE:?}" "${DEVSPACES_CHANNEL:?}"
   : "${GIT_ORG:?}" "${GIT_REPO:?}" "${GIT_BRANCH:?}"
+
+  # --- AI backend ---
   AI_BACKEND="${AI_BACKEND:-none}"
-  AI_MODEL="${AI_MODEL:-qwen2.5-coder-7b-instruct}"
+  AI_MODEL="${AI_MODEL:-llama-3.2-3b-instruct}"
   AI_SERVICE_NAME="${AI_SERVICE_NAME:-coder-model}"
   RHOAI_NAMESPACE="${RHOAI_NAMESPACE:-redhat-ods-applications}"
   OLLAMA_MODEL="${OLLAMA_MODEL:-qwen2.5-coder:1.5b}"
+  # Empty means discover from the cluster's own vllm-cuda-runtime-template.
+  AI_RUNTIME_IMAGE="${AI_RUNTIME_IMAGE:-}"
+
   case "${AI_BACKEND}" in
     rhoai|ollama|none) ;;
     *) die "AI_BACKEND must be one of: rhoai, ollama, none (got '${AI_BACKEND}')" ;;
   esac
-  [[ "${AI_BACKEND}" == "rhoai" ]] && : "${AI_MODEL_IMAGE:?AI_MODEL_IMAGE is required when AI_BACKEND=rhoai}"
+  [[ "${AI_BACKEND}" == "rhoai" ]] \
+    && : "${AI_MODEL_IMAGE:?AI_MODEL_IMAGE is required when AI_BACKEND=rhoai}"
   AI_BASE_URL="$(ai_base_url)"
-  # Empty means discover from the cluster's own vllm-cuda-runtime-template.
-  AI_RUNTIME_IMAGE="${AI_RUNTIME_IMAGE:-}"
+
+  # --- GPU handling ---
   FREE_GPU="${FREE_GPU:-true}"
   RHDP_SAMPLE_NAMESPACES="${RHDP_SAMPLE_NAMESPACES:-my-first-model}"
+
+  # --- internal Git ---
   DEPLOY_GITLAB="${DEPLOY_GITLAB:-true}"
   GITLAB_NAMESPACE="${GITLAB_NAMESPACE:-gitlab-system}"
   GITLAB_GROUP="${GITLAB_GROUP:-platform-engineering}"
   CLUSTER_APPS_DOMAIN="${CLUSTER_APPS_DOMAIN:-$(cluster_apps_domain)}"
   GITLAB_HOST="${GITLAB_HOST:-gitlab.${CLUSTER_APPS_DOMAIN}}"
-  GITLAB_CHART_VERSION="${GITLAB_CHART_VERSION:-10.3.1}"
-  # Generated once per environment and cached, so re-running up.sh does not
-  # rotate credentials out from under a running database.
+  # The operator accepts only the chart versions it ships, and that list moves
+  # with each operator release. It rejects others at admission and names the
+  # valid ones in the error, so update this when that happens.
+  GITLAB_CHART_VERSION="${GITLAB_CHART_VERSION:-10.4.0}"
+
   load_or_generate_secrets
 }
 
-# Dependency credentials for PostgreSQL, Redis and MinIO.
+# The cluster's wildcard apps domain. Everything routable hangs off this and it
+# changes with every environment, so it is discovered rather than configured.
+cluster_apps_domain() {
+  oc get ingresscontroller default -n openshift-ingress-operator \
+    -o jsonpath='{.status.domain}' 2>/dev/null || true
+}
+
+gitlab_host() {
+  oc get route gitlab -n "${GITLAB_NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || true
+}
+
+# The single point of truth for what a workspace talks to. Both AI backends
+# expose an OpenAI-compatible API, which is why swapping them is a variable
+# change rather than a fork of the demo.
+ai_base_url() {
+  case "${AI_BACKEND}" in
+    rhoai)
+      echo "http://${AI_SERVICE_NAME}-predictor.${DEMO_NAMESPACE}.svc.cluster.local:8080/v1"
+      ;;
+    ollama)
+      echo "http://${AI_SERVICE_NAME}.${DEMO_NAMESPACE}.svc.cluster.local:11434/v1"
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+# --- credentials ------------------------------------------------------------
+
+# Dependency credentials for PostgreSQL, Redis and object storage.
 #
 # These live OUTSIDE the repository, under ~/.config/rhds-demo/. They were
-# previously written to .demo-secrets in the working tree and were committed
-# and published twice, because a gitignore entry is a control that has to be
-# remembered rather than one that holds by construction. Nothing sensitive
-# should exist inside the repo for git to pick up in the first place.
+# previously written to .demo-secrets in the working tree and were committed and
+# published twice, because a gitignore entry is a control you have to remember
+# rather than one that holds by construction. Nothing sensitive should exist
+# inside the repo for git to pick up in the first place.
 #
 # Keyed by cluster, so rotating environments do not collide and an old
-# cluster's credentials are not silently reused against a new database.
+# cluster's credentials are never silently reused against a new database.
 load_or_generate_secrets() {
   local dir="${XDG_CONFIG_HOME:-${HOME}/.config}/rhds-demo"
   local key f
@@ -69,8 +117,8 @@ load_or_generate_secrets() {
   key="${key:-default}"
   f="${dir}/secrets-${key}.env"
 
-  # Hard stop if the old in-repo file is still around. Silently ignoring it
-  # is how this recurred: the file gets regenerated, then committed.
+  # Hard stop if the old in-repo file is still present. Ignoring it silently is
+  # how the leak recurred: the file gets regenerated, then committed.
   local legacy="${REPO_ROOT}/.demo-secrets"
   if [[ -f "${legacy}" ]]; then
     warn "found .demo-secrets in the working tree."
@@ -89,105 +137,166 @@ load_or_generate_secrets() {
   else
     umask 077
     cat > "${f}" <<EOS
-# Generated by scripts/lib.sh for ${key}. Not in the repository, by design.
-# Delete to rotate, but note PostgreSQL and MinIO only accept new credentials
-# on an empty volume, so their PVCs must go too. See docs/RUNBOOK.md.
+# Generated by scripts/lib.sh for ${key}. Outside the repository, by design.
+#
+# Delete to rotate, but note that PostgreSQL and object storage only accept new
+# credentials on an EMPTY volume, so their PVCs must go too, and Redis needs a
+# pod restart. Half-rotating leaves authentication failures that look like
+# configuration errors. See docs/RUNBOOK.md.
 DB_PASSWORD="$(openssl rand -hex 16)"
 DB_ADMIN_PASSWORD="$(openssl rand -hex 16)"
 REDIS_PASSWORD="$(openssl rand -hex 16)"
-MINIO_ACCESS_KEY="$(openssl rand -hex 8)"
-MINIO_SECRET_KEY="$(openssl rand -hex 24)"
+S3_ACCESS_KEY="$(openssl rand -hex 8)"
+S3_SECRET_KEY="$(openssl rand -hex 24)"
 EOS
     # shellcheck disable=SC1090
     set -a; source "${f}"; set +a
     info "generated credentials for ${key} in ${f}"
   fi
+
+  # MINIO_* are historical names from before the switch to SeaweedFS. Aliased so
+  # a credentials file generated earlier still matches what a running database
+  # was initialised with.
+  S3_ACCESS_KEY="${S3_ACCESS_KEY:-${MINIO_ACCESS_KEY:-}}"
+  S3_SECRET_KEY="${S3_SECRET_KEY:-${MINIO_SECRET_KEY:-}}"
 }
 
-# The cluster's wildcard apps domain. Everything routable hangs off this, and
-# it changes with every environment, so it is discovered rather than configured.
-cluster_apps_domain() {
-  oc get ingresscontroller default -n openshift-ingress-operator \
-    -o jsonpath='{.status.domain}' 2>/dev/null || true
+# --- cluster state ----------------------------------------------------------
+
+# up.sh records which cluster it provisioned so the other scripts can notice a
+# stray kube context switch. Without this, every check fails against a cluster
+# that was never set up and the output reads like a broken demo rather than a
+# wrong kubeconfig. Kept outside the repo alongside the credentials.
+state_file() {
+  echo "${XDG_CONFIG_HOME:-${HOME}/.config}/rhds-demo/state.env"
 }
 
-# Route hostname, resolved from the cluster. The Route, not the Service DNS:
-# the browser has to resolve it when creating a workspace, and the workspace
-# pod has to resolve it when cloning. Only the Route satisfies both.
-gitlab_host() {
-  oc get route gitlab -n "${GITLAB_NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || true
+record_cluster() {
+  local f; f="$(state_file)"
+  mkdir -p "$(dirname "${f}")"
+  cat > "${f}" <<EOS
+PROVISIONED_SERVER="${CURRENT_SERVER}"
+PROVISIONED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+PROVISIONED_BACKEND="${AI_BACKEND}"
+EOS
 }
 
-# The single point of truth for what the workspace talks to. Both backends
-# expose an OpenAI-compatible API, which is why swapping them is a variable
-# change rather than a fork of the demo.
-ai_base_url() {
-  case "${AI_BACKEND}" in
-    rhoai)
-      echo "http://${AI_SERVICE_NAME}-predictor.${DEMO_NAMESPACE}.svc.cluster.local:8080/v1"
-      ;;
-    ollama)
-      echo "http://${AI_SERVICE_NAME}.${DEMO_NAMESPACE}.svc.cluster.local:11434/v1"
-      ;;
-    *)
-      echo ""
-      ;;
-  esac
+assert_provisioned_cluster() {
+  local f; f="$(state_file)"
+  if [[ ! -f "${f}" ]]; then
+    warn "no record of a provisioned cluster. If this is a fresh environment, run scripts/up.sh first."
+    return 0
+  fi
+  # shellcheck disable=SC1090
+  source "${f}"
+
+  if [[ "${CURRENT_SERVER}" != "${PROVISIONED_SERVER}" ]]; then
+    die "wrong cluster.
+    provisioned : ${PROVISIONED_SERVER}
+    current     : ${CURRENT_SERVER}
+    Your kube context has moved since up.sh ran. Log back into the demo
+    cluster, or run up.sh here if this is a new environment."
+  fi
+
+  # These environments expire after about five days. Better to know now than on
+  # the morning of a session.
+  local then now age
+  then="$(date -u -d "${PROVISIONED_AT}" +%s 2>/dev/null \
+    || date -u -jf "%Y-%m-%dT%H:%M:%SZ" "${PROVISIONED_AT}" +%s 2>/dev/null || echo 0)"
+  now="$(date -u +%s)"
+  if [[ "${then}" != "0" ]]; then
+    age=$(( (now - then) / 86400 ))
+    if (( age >= 4 )); then
+      warn "this environment was provisioned ${age} days ago and they typically last 5."
+      warn "request a new one before your next session."
+    fi
+  fi
 }
 
-# Substitute placeholders in a manifest or devfile. Keeps every cluster-specific
-# value in demo.env and nothing in the committed YAML.
-# Substitute placeholders in a manifest. Keeps every cluster-specific value in
-# demo.env (or discovered at runtime) and nothing in the committed YAML.
+# --- rendering --------------------------------------------------------------
+
+# Substitute placeholders in a manifest. Every cluster-specific value comes from
+# demo.env, from the credentials file, or is discovered at runtime. Nothing
+# environment-specific belongs in committed YAML.
+#
+# Refuses to emit anything with an unresolved placeholder, in EITHER of the two
+# ways that can happen:
+#
+#   1. No substitution rule exists for it. Easy to spot.
+#   2. A rule exists but the variable is empty, so it substitutes nothing.
+#      This is the dangerous one: the manifest applies cleanly and then fails
+#      much later as InvalidImageName or similar, which reads like a registry
+#      problem rather than a scripting one. It cost most of a day once.
 render() {
-  local out
-  out="$(sed \
-    -e "s|DEMO_NAMESPACE_PLACEHOLDER|${DEMO_NAMESPACE}|g" \
-    -e "s|DEVSPACES_NAMESPACE_PLACEHOLDER|${DEVSPACES_NAMESPACE}|g" \
-    -e "s|CHANNEL_PLACEHOLDER|${DEVSPACES_CHANNEL}|g" \
-    -e "s|GIT_ORG_PLACEHOLDER|${GIT_ORG}|g" \
-    -e "s|GIT_REPO_PLACEHOLDER|${GIT_REPO}|g" \
-    -e "s|GIT_BRANCH_PLACEHOLDER|${GIT_BRANCH}|g" \
-    -e "s|AI_MODEL_IMAGE_PLACEHOLDER|${AI_MODEL_IMAGE:-}|g" \
-    -e "s|AI_MODEL_PLACEHOLDER|${AI_MODEL:-}|g" \
-    -e "s|AI_SERVICE_NAME_PLACEHOLDER|${AI_SERVICE_NAME:-}|g" \
-    -e "s|AI_BASE_URL_PLACEHOLDER|${AI_BASE_URL:-}|g" \
-    -e "s|VLLM_IMAGE_PLACEHOLDER|${AI_RUNTIME_IMAGE:-}|g" \
-    -e "s|GITLAB_HOST_PLACEHOLDER|${GITLAB_HOST:-}|g" \
-    -e "s|GITLAB_NAMESPACE_PLACEHOLDER|${GITLAB_NAMESPACE:-}|g" \
-    -e "s|GITLAB_GROUP_PLACEHOLDER|${GITLAB_GROUP:-}|g" \
-    -e "s|CLUSTER_APPS_DOMAIN_PLACEHOLDER|${CLUSTER_APPS_DOMAIN:-}|g" \
-    -e "s|GITLAB_CHART_VERSION_PLACEHOLDER|${GITLAB_CHART_VERSION:-}|g" \
-    -e "s|DB_PASSWORD_PLACEHOLDER|${DB_PASSWORD:-}|g" \
-    -e "s|DB_ADMIN_PASSWORD_PLACEHOLDER|${DB_ADMIN_PASSWORD:-}|g" \
-    -e "s|REDIS_PASSWORD_PLACEHOLDER|${REDIS_PASSWORD:-}|g" \
-    -e "s|MINIO_ACCESS_KEY_PLACEHOLDER|${MINIO_ACCESS_KEY:-}|g" \
-    -e "s|MINIO_SECRET_KEY_PLACEHOLDER|${MINIO_SECRET_KEY:-}|g" \
-    -e "s|USER_NAMESPACE_PLACEHOLDER|${USER_NAMESPACE:-}|g" \
-    "$1")"
+  local file="$1"
+  local -a pairs=(
+    DEMO_NAMESPACE_PLACEHOLDER        "${DEMO_NAMESPACE:-}"
+    DEVSPACES_NAMESPACE_PLACEHOLDER   "${DEVSPACES_NAMESPACE:-}"
+    CHANNEL_PLACEHOLDER               "${DEVSPACES_CHANNEL:-}"
+    GIT_ORG_PLACEHOLDER               "${GIT_ORG:-}"
+    GIT_REPO_PLACEHOLDER              "${GIT_REPO:-}"
+    GIT_BRANCH_PLACEHOLDER            "${GIT_BRANCH:-}"
+    AI_MODEL_IMAGE_PLACEHOLDER        "${AI_MODEL_IMAGE:-}"
+    AI_MODEL_PLACEHOLDER              "${AI_MODEL:-}"
+    AI_SERVICE_NAME_PLACEHOLDER       "${AI_SERVICE_NAME:-}"
+    AI_BASE_URL_PLACEHOLDER           "${AI_BASE_URL:-}"
+    VLLM_IMAGE_PLACEHOLDER            "${AI_RUNTIME_IMAGE:-}"
+    GITLAB_HOST_PLACEHOLDER           "${GITLAB_HOST:-}"
+    GITLAB_NAMESPACE_PLACEHOLDER      "${GITLAB_NAMESPACE:-}"
+    GITLAB_GROUP_PLACEHOLDER          "${GITLAB_GROUP:-}"
+    CLUSTER_APPS_DOMAIN_PLACEHOLDER   "${CLUSTER_APPS_DOMAIN:-}"
+    GITLAB_CHART_VERSION_PLACEHOLDER  "${GITLAB_CHART_VERSION:-}"
+    DB_PASSWORD_PLACEHOLDER           "${DB_PASSWORD:-}"
+    DB_ADMIN_PASSWORD_PLACEHOLDER     "${DB_ADMIN_PASSWORD:-}"
+    REDIS_PASSWORD_PLACEHOLDER        "${REDIS_PASSWORD:-}"
+    S3_ACCESS_KEY_PLACEHOLDER         "${S3_ACCESS_KEY:-}"
+    S3_SECRET_KEY_PLACEHOLDER         "${S3_SECRET_KEY:-}"
+    USER_NAMESPACE_PLACEHOLDER        "${USER_NAMESPACE:-}"
+  )
 
-  # Nothing should reach the cluster with a placeholder still in it. An
-  # unsubstituted image name fails much later as InvalidImageName, which reads
-  # like a registry problem rather than a scripting one, and costs an hour.
+  local i name val empty=""
+  local -a sedargs=()
+  for (( i = 0; i < ${#pairs[@]}; i += 2 )); do
+    name="${pairs[i]}"
+    val="${pairs[i+1]}"
+    if [[ -z "${val}" ]] && grep -q "${name}" "${file}"; then
+      empty="${empty}      ${name}"$'\n'
+    fi
+    sedargs+=( -e "s|${name}|${val}|g" )
+  done
+
+  if [[ -n "${empty}" ]]; then
+    warn "these placeholders appear in ${file} but their value is empty:"
+    printf '%s' "${empty}" >&2
+    die "refusing to apply. Substituting an empty value produces a manifest that
+    applies cleanly and then fails later in a way that looks like an
+    infrastructure problem. Check demo.env and the discovery steps in up.sh."
+  fi
+
+  local out
+  out="$(sed "${sedargs[@]}" "${file}")"
+
   if grep -q 'PLACEHOLDER' <<< "${out}"; then
-    warn "unsubstituted placeholders in $1:"
+    warn "no substitution rule for these placeholders in ${file}:"
     grep -o '[A-Z_]*PLACEHOLDER' <<< "${out}" | sort -u | sed 's/^/      /' >&2
-    die "refusing to apply. A variable is empty or a render rule is missing."
+    die "refusing to apply. Add a rule to render() in scripts/lib.sh."
   fi
   echo "${out}"
 }
+
+# --- waits ------------------------------------------------------------------
 
 wait_for_csv() {
   local name="$1" ns="$2" timeout="${3:-600}" elapsed=0
   info "waiting for ${name} CSV in ${ns}"
   while (( elapsed < timeout )); do
-    local phase
-    phase="$(oc get csv -n "${ns}" -o jsonpath="{.items[?(@.spec.displayName!='')].status.phase}" 2>/dev/null | tr ' ' '\n' | sort -u | tr '\n' ' ')"
-    if oc get csv -n "${ns}" 2>/dev/null | grep -qi "^${name}.*Succeeded"; then
+    if oc get csv -n "${ns}" \
+         -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.phase}{"\n"}{end}' 2>/dev/null \
+         | grep -qi "${name}.*Succeeded"; then
       info "operator ready"; return 0
     fi
     sleep 10; elapsed=$((elapsed+10))
-    (( elapsed % 60 == 0 )) && info "  still waiting (${elapsed}s, phases: ${phase:-none})"
+    (( elapsed % 60 == 0 )) && info "  still waiting (${elapsed}s)"
   done
   die "timed out waiting for the ${name} operator"
 }
@@ -207,7 +316,7 @@ wait_for_checluster() {
 }
 
 wait_for_inferenceservice() {
-  local name="$1" ns="$2" timeout="${3:-1200}" elapsed=0
+  local name="$1" ns="$2" timeout="${3:-3600}" elapsed=0
   info "waiting for InferenceService ${name} (first model pull is the slow part)"
   while (( elapsed < timeout )); do
     local ready
@@ -216,6 +325,39 @@ wait_for_inferenceservice() {
     if [[ "${ready}" == "True" ]]; then
       info "model is serving"; return 0
     fi
+
+    # An init container in backoff never recovers. Fail now rather than burning
+    # the full timeout on something already dead.
+    if oc get pods -n "${ns}" -l component=predictor \
+         -o jsonpath='{.items[*].status.initContainerStatuses[*].state.waiting.reason}' 2>/dev/null \
+         | grep -q 'ImagePullBackOff\|ErrImagePull\|CrashLoopBackOff'; then
+      warn "predictor init container is in backoff, this will not recover"
+      oc describe pod -n "${ns}" -l component=predictor | tail -15
+      return 1
+    fi
+
+    # No pod at all after two minutes means the InferenceService cannot
+    # reconcile, usually an invalid ServingRuntime such as an empty image.
+    # Waiting will not fix it.
+    if (( elapsed >= 120 )) && \
+       [[ -z "$(oc get pods -n "${ns}" -l component=predictor -o name 2>/dev/null)" ]]; then
+      warn "no predictor pod exists after ${elapsed}s, the InferenceService is not reconciling"
+      oc get events -n "${ns}" --sort-by=.lastTimestamp | grep -i inferenceservice | tail -5
+      return 1
+    fi
+
+    # A Pending pod beside a Running one is a rolling update deadlocked on a
+    # single GPU, not a failure to start. The model works; say so.
+    if [[ -n "$(oc get pods -n "${ns}" -l component=predictor \
+           --field-selector status.phase=Running -o name 2>/dev/null)" ]] && \
+       [[ -n "$(oc get pods -n "${ns}" -l component=predictor \
+           --field-selector status.phase=Pending -o name 2>/dev/null)" ]]; then
+      warn "an older predictor is serving while a new one waits for the GPU."
+      warn "the model works, but the rolling update cannot complete on one GPU."
+      warn "clear the stale ReplicaSet, or check deploymentStrategy is Recreate."
+      return 0
+    fi
+
     sleep 20; elapsed=$((elapsed+20))
     (( elapsed % 60 == 0 )) && info "  still waiting (${elapsed}s)"
   done
@@ -225,6 +367,39 @@ wait_for_inferenceservice() {
   return 1
 }
 
+wait_for_gitlab() {
+  local ns="$1" timeout="${2:-3600}" elapsed=0
+  info "waiting for GitLab to reconcile (first run is genuinely slow)"
+  while (( elapsed < timeout )); do
+    local phase
+    phase="$(oc get gitlab gitlab -n "${ns}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+    if [[ "${phase}" == "Running" ]]; then
+      info "GitLab is Running"; return 0
+    fi
+    # Webservice ready is the practical signal; the CR status can lag behind it.
+    if [[ "$(oc get deployment gitlab-webservice-default -n "${ns}" \
+         -o jsonpath='{.status.readyReplicas}' 2>/dev/null)" =~ ^[1-9] ]]; then
+      info "webservice is ready"; return 0
+    fi
+    sleep 30; elapsed=$((elapsed+30))
+    if (( elapsed % 120 == 0 )); then
+      info "  still waiting (${elapsed}s, phase: ${phase:-pending})"
+      # Surface a stuck reconcile rather than sitting quietly through it. A
+      # missing CRD loops here forever with no clue why.
+      local err
+      err="$(oc logs -n "${ns}" deployment/gitlab-controller-manager --tail=3 2>/dev/null \
+        | grep -o 'no matches for kind [^"]*' | tail -1 || true)"
+      [[ -n "${err}" ]] && warn "operator is stuck: ${err}"
+    fi
+  done
+  warn "GitLab did not come up in ${timeout}s"
+  warn "check: oc get pods -n ${ns}"
+  warn "and:   oc logs -n ${ns} deployment/gitlab-controller-manager --tail=20"
+  return 1
+}
+
+# --- GPU --------------------------------------------------------------------
+
 # Free the GPU held by known, disposable RHDP sample workloads.
 #
 # We act ONLY on namespaces in an explicit allow-list, and only when they are
@@ -232,21 +407,6 @@ wait_for_inferenceservice() {
 # this script's job: it has to stay safe to run anywhere, including on a shared
 # or customer cluster. Anything not on the list produces a warning and nothing
 # else. Set FREE_GPU=false to disable and warn only.
-# Read the vLLM runtime image from the cluster's own template. RHOAI ships
-# runtime images matched to its version, so discovering beats pinning: a
-# mismatched runtime fails deep inside vLLM startup, after an 18GB pull, with
-# an error that reads like a model problem rather than a version problem.
-discover_vllm_image() {
-  local tmpl img
-  tmpl="$(oc get templates -n "${RHOAI_NAMESPACE}" -o name 2>/dev/null \
-    | grep -i 'vllm-cuda' | head -1)"
-  [[ -n "${tmpl}" ]] || return 1
-  img="$(oc get "${tmpl}" -n "${RHOAI_NAMESPACE}" \
-    -o jsonpath='{.objects[0].spec.containers[0].image}' 2>/dev/null)"
-  [[ -n "${img}" ]] || return 1
-  echo "${img}"
-}
-
 free_gpu_if_safe() {
   local holders holder
   holders="$(oc get pods -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\t"}{.spec.containers[*].resources.requests.nvidia\.com/gpu}{"\n"}{end}' 2>/dev/null \
@@ -284,12 +444,9 @@ check_gpu_capacity() {
     return 1
   fi
 
-  # Capacity is not availability. RHOAI demo environments frequently arrive with
-  # a sample workload already holding the GPU, which lets a naive capacity check
-  # pass and then leaves the InferenceService Pending with no obvious cause.
   # Count only GPUs held OUTSIDE the demo namespace. Our own predictor
-  # legitimately holds one once the model is serving, and counting it would
-  # make the check fail precisely when everything is working.
+  # legitimately holds one once the model is serving, and counting it would make
+  # this check fail precisely when everything is working.
   used="$(oc get pods --all-namespaces \
     -o jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.namespace}{"\t"}{.spec.containers[*].resources.requests.nvidia\.com/gpu}{"\n"}{end}' 2>/dev/null \
     | awk -F'\t' -v ns="${DEMO_NAMESPACE}" '$2 != "" && $1 != ns {print $2}' \
@@ -305,33 +462,25 @@ check_gpu_capacity() {
     warn "RHOAI environment: they often ship with a sample model already served."
     warn "Nothing here will schedule until you free one."
     warn ""
-    warn "See what is holding them:"
-    warn "  ./scripts/gpu-claims.sh"
+    warn "See what is holding them:  ./scripts/gpu-claims.sh"
     warn ""
-    warn "Then either scale down or delete the pre-existing workload, or set"
+    warn "Then scale down or delete the pre-existing workload, or set"
     warn "AI_BACKEND=ollama in demo.env if you would rather not touch it."
     return 1
   fi
 }
 
-wait_for_gitlab() {
-  local ns="$1" timeout="${2:-2400}" elapsed=0
-  info "waiting for GitLab to reconcile (first run is genuinely slow, 15-25 min)"
-  while (( elapsed < timeout )); do
-    local phase
-    phase="$(oc get gitlab gitlab -n "${ns}" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
-    if [[ "${phase}" == "Running" ]]; then
-      info "GitLab is Running"; return 0
-    fi
-    # Webservice ready is the practical signal: the CR can lag behind it.
-    if [[ "$(oc get deployment gitlab-webservice-default -n "${ns}" \
-         -o jsonpath='{.status.readyReplicas}' 2>/dev/null)" =~ ^[1-9] ]]; then
-      info "webservice is ready"; return 0
-    fi
-    sleep 30; elapsed=$((elapsed+30))
-    (( elapsed % 120 == 0 )) && info "  still waiting (${elapsed}s, phase: ${phase:-pending})"
-  done
-  warn "GitLab did not come up in ${timeout}s"
-  warn "check: oc get pods -n ${ns}"
-  return 1
+# Read the vLLM runtime image from the cluster's own template. RHOAI ships
+# runtime images matched to its version, so discovering beats pinning: a
+# mismatched runtime fails deep inside vLLM startup, after an 18GB pull, with an
+# error that reads like a model problem rather than a version problem.
+discover_vllm_image() {
+  local tmpl img
+  tmpl="$(oc get templates -n "${RHOAI_NAMESPACE}" -o name 2>/dev/null \
+    | grep -i 'vllm-cuda' | head -1)"
+  [[ -n "${tmpl}" ]] || return 1
+  img="$(oc get "${tmpl}" -n "${RHOAI_NAMESPACE}" \
+    -o jsonpath='{.objects[0].spec.containers[0].image}' 2>/dev/null)"
+  [[ -n "${img}" ]] || return 1
+  echo "${img}"
 }

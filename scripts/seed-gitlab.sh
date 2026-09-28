@@ -10,6 +10,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${REPO_ROOT}/scripts/lib.sh"
 load_env; require oc; require git; require curl; require_login
+assert_provisioned_cluster
 
 BASE="https://${GITLAB_HOST}"
 CURL="curl -fsSk"
