@@ -1,8 +1,8 @@
 ---
-# Same control as the Ollama path, expressed against the serving pods.
-# Worth showing live: the inference endpoint is reachable from developer
-# workspaces and from nothing else. On a laptop you are trusting policy;
-# here it is configuration you can point at.
+# Worth showing live in act 6. The inference endpoint is reachable from
+# developer workspaces and from nothing else. On a laptop, "developers must
+# only use the approved assistant" is a policy you trust people to follow.
+# Here it is configuration you can point at.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Show what is currently holding the GPUs, and how to release them.
+# Show what is currently holding the GPUs, and how to release them. Read-only.
 #
-# RHOAI demo environments are usually provisioned with a sample model already
-# being served. That workload holds the GPU, so your InferenceService sits
-# Pending. This script tells you what to remove.
+# RHOAI environments are usually provisioned with a sample model already served.
+# That workload holds the GPU, so your InferenceService sits Pending. This tells
+# you what to remove.
+#
+# up.sh clears known RHDP sample namespaces automatically. This script is for
+# looking before it acts, or for anything not on that allow-list.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${REPO_ROOT}/scripts/lib.sh"
@@ -29,7 +32,7 @@ oc get notebooks --all-namespaces 2>/dev/null || info "none"
 banner "How to release one"
 cat <<'MSG'
     Prefer scaling down over deleting. It is reversible, and if this environment
-    is shared you have not destroyed someone else's work.
+    turns out to be shared you have not destroyed someone else's work.
 
     A pre-existing InferenceService:
       oc patch inferenceservice <name> -n <ns> \
@@ -45,11 +48,11 @@ cat <<'MSG'
     A plain deployment:
       oc scale deployment/<name> -n <ns> --replicas=0
 
-    Then confirm the GPU is free and re-run:
+    Then confirm and re-run:
       ./scripts/gpu-claims.sh
       ./scripts/up.sh
 
-    Note the pod can take a minute to terminate and release the device. If the
-    scheduler still will not place your predictor, wait and check again before
-    assuming something else is wrong.
+    Allow a minute after scaling down. The pod must terminate before the device
+    plugin releases the GPU, and the scheduler will not place your predictor
+    until it does. Do not conclude something else is broken in that window.
 MSG

@@ -8,7 +8,6 @@ metadata:
   namespace: GITLAB_NAMESPACE_PLACEHOLDER
 type: Opaque
 stringData:
-  # The chart expects the Redis password under this key.
   password: REDIS_PASSWORD_PLACEHOLDER
 ---
 apiVersion: v1
@@ -49,20 +48,19 @@ spec:
           env:
             - name: REDIS_PASSWORD
               valueFrom:
-                secretKeyRef: { name: gitlab-redis, key: password }
+                secretKeyRef: {name: gitlab-redis, key: password}
           resources:
-            requests: { cpu: 100m, memory: 512Mi }
-            limits: { cpu: "1", memory: 2Gi }
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {cpu: "1", memory: 2Gi}
           volumeMounts:
             - name: data
               mountPath: /var/lib/redis/data
           readinessProbe:
+            # TCP, not /usr/libexec/check-container. That script ships with the
+            # PostgreSQL image but NOT this one, and assuming otherwise left a
+            # healthy Redis failing its rollout for twenty minutes.
             tcpSocket:
               port: 6379
-            initialDelaySeconds: 10
-            periodSeconds: 10
-          exec:
-            command: ["/usr/libexec/check-container"]
             initialDelaySeconds: 10
             periodSeconds: 10
       volumes:

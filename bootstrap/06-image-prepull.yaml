@@ -1,8 +1,9 @@
 ---
-# Pulls every image the demo needs onto every worker node ahead of time.
-# Not a production pattern, purely a demo reliability device: it converts a
+# Pulls the workspace images onto every worker node ahead of time.
+#
+# Not a production pattern. Purely a demo reliability device: it converts a
 # four minute cold pull in front of a customer into a background job you ran
-# over coffee.
+# over coffee. Applied by smoke.sh, not by up.sh.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:

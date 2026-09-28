@@ -8,8 +8,8 @@
 # container, which is also how a bank would actually run it.
 #
 # Chart 10.x removed the bundled PostgreSQL, Redis and object storage, so those
-# are supplied by the 00-* manifests alongside this one. That is a fair
-# reflection of reality: no bank runs its SCM's database as a chart subchart.
+# are supplied by the 00-* manifests alongside this one. A fair reflection of
+# reality: no bank runs its SCM's database as a chart subchart.
 apiVersion: apps.gitlab.com/v1beta1
 kind: GitLab
 metadata:
@@ -17,8 +17,10 @@ metadata:
   namespace: GITLAB_NAMESPACE_PLACEHOLDER
 spec:
   chart:
-    # The operator accepts only the chart versions it ships. It rejects
-    # anything else at admission and lists the valid ones in the error.
+    # Discovered from the operator at run time, because the accepted list moves
+    # with each operator release (10.3.1 on one environment, 10.4.0 three weeks
+    # later). up.sh probes the admission webhook, which is the only way the
+    # operator exposes what it supports.
     version: "GITLAB_CHART_VERSION_PLACEHOLDER"
     values:
       global:
@@ -40,19 +42,20 @@ spec:
 
         # MUST be a sibling of ingress, not nested inside it. Nesting it renders
         # global.ingress.gatewayApi, which the chart silently ignores, and the
-        # operator then loops forever on missing kinds with no clue why.
+        # operator then loops forever on missing kinds with no clue why. That
+        # mistake cost four cycles.
         #
         # Chart 10.x renders Gateway API resources: an EnvoyProxy (needs Envoy
-        # Gateway's CRDs) and a TCPRoute (an experimental-channel Gateway API
-        # CRD that OpenShift's Ingress Operator will not permit installing).
-        # Both are unnecessary here because Routes handle ingress.
+        # Gateway's CRDs, which up.sh installs) and a TCPRoute (an
+        # experimental-channel Gateway API CRD that OpenShift's Ingress Operator
+        # will not permit installing at all). Both are unnecessary here.
         #
-        # Verify this landed correctly before applying:
+        # Verify this landed in the right place before applying:
         #   bash -c 'source scripts/lib.sh; load_env; \
         #     render overlays/gitlab/02-gitlab.yaml' | python3 -c \
         #     "import yaml,sys; print(list(yaml.safe_load(sys.stdin)\
         #     ['spec']['chart']['values']['global'].keys()))"
-        # gatewayApi must appear in that list.
+        # gatewayApi must appear in that list. scripts/preflight.sh checks it.
         gatewayApi:
           enabled: false
           installEnvoy: false
@@ -76,8 +79,8 @@ spec:
             key: password
 
         # Every one of these needs a connection or the chart refuses to render,
-        # even though this demo never writes an artefact. Note the key is
-        # "config", not "connection": that is what GitLab's own examples use.
+        # even though this demo never writes an artefact. The key is "config",
+        # not "connection": that is what GitLab's own examples use.
         appConfig:
           object_store:
             enabled: true
@@ -145,10 +148,12 @@ spec:
         gitlab-shell:
           minReplicas: 1
           maxReplicas: 1
-      toolbox:
-        enabled: true
-        backups:
-          objectStorage:
-            config:
-              secret: gitlab-s3cmd-config
-              key: config
+        toolbox:
+          enabled: true
+          # Needed or the toolbox crashloops on a missing /etc/gitlab/.s3cfg,
+          # which takes rails console and therefore seeding with it.
+          backups:
+            objectStorage:
+              config:
+                secret: gitlab-s3cmd-config
+                key: config

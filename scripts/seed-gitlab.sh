@@ -5,14 +5,15 @@
 # GitLab is one of the four providers Dev Spaces actually supports
 # (checluster.spec.gitServices: azure, bitbucket, github, gitlab). That is the
 # whole reason for using it: Dev Spaces cannot resolve a devfile from an
-# unrecognised provider, which is where the Gitea attempt died.
+# unrecognised provider, which is where an earlier Gitea attempt died after
+# three days of work.
 #
 # Pushes straight from your working tree. Re-run any time you change a sample:
 # it force-pushes, so the projects always match your tree.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${REPO_ROOT}/scripts/lib.sh"
-load_env; require oc; require git; require curl; require_login
+load_env; require oc; require git; require curl; require python3; require_login
 assert_provisioned_cluster
 
 BASE="https://${GITLAB_HOST}"
@@ -37,6 +38,8 @@ if [[ -n "${GITLAB_TOKEN:-}" ]]; then
   TOKEN="${GITLAB_TOKEN}"
 else
   info "no GITLAB_TOKEN set, trying the toolbox pod"
+  # --field-selector so a crashlooping toolbox is not selected: otherwise the
+  # exec below fails in a way that looks like a seeding problem.
   TOOLBOX="$(oc get pods -n "${GITLAB_NAMESPACE}" -l app=toolbox \
     --field-selector=status.phase=Running -o name 2>/dev/null | head -1)"
 
@@ -52,10 +55,12 @@ else
 
     Then: export GITLAB_TOKEN=<token> && ./scripts/seed-gitlab.sh"
 
-  # TIMEOUT IS LOAD-BEARING. Rails takes a minute or two to boot on the toolbox
-  # pod, and without a bound this exec hangs, taking up.sh down with it. That is
-  # a silent stall with no output, which is the worst kind.
-  info "minting an API token via the toolbox (Rails is slow to boot, allow 3 min)"
+  # THE TIMEOUT IS LOAD-BEARING. The first gitlab-rails invocation on a fresh
+  # toolbox pod is a cold Rails boot with an empty bootsnap cache and can take a
+  # couple of minutes. Without a bound this exec hangs, taking up.sh down with
+  # it, and it produces no output at all while doing so. That is the worst kind
+  # of failure and it cost an hour.
+  info "minting an API token via the toolbox (cold Rails boot, allow 3 min)"
   TOKEN="$(timeout 240 oc exec -n "${GITLAB_NAMESPACE}" "${TOOLBOX}" -- \
     gitlab-rails runner "
       u = User.find_by_username('root')
@@ -78,13 +83,12 @@ fi
 API="${BASE}/api/v4"
 AUTH=(-H "PRIVATE-TOKEN: ${TOKEN}")
 
-# Fail here, clearly, rather than three steps later on a confusing 404.
+# Validate here, clearly, rather than three steps later on a confusing 404.
 "${CURL[@]}" "${AUTH[@]}" "${API}/user" >/dev/null 2>&1 \
   || die "the token was rejected (401).
 
     It must be a PERSONAL access token (starts glpat-), not a project or group
-    token, and it needs the 'api' scope, not just 'read_api'.
-    Check it directly:
+    token, and it needs the 'api' scope, not just 'read_api'. Check it:
       curl -sk -H \"PRIVATE-TOKEN: \${GITLAB_TOKEN}\" ${API}/user"
 
 info "AI endpoint: ${AI_BASE_URL:-none}"
@@ -144,8 +148,10 @@ publish ansible-automation
 publish ledger-service
 
 # --- Dev Spaces SCM provider ------------------------------------------------
-# The part Gitea could not do. Dev Spaces needs an OAuth application registered
-# in GitLab so it can fetch devfiles and act on the developer's behalf.
+# The part an unsupported provider could not do. Dev Spaces needs an OAuth
+# application registered in GitLab so it can fetch devfiles and act on the
+# developer's behalf. This is also what makes the per-user OAuth handshake in
+# act 6 work, which is the strongest security moment in the demo.
 banner "Registering Dev Spaces as an OAuth application"
 
 CALLBACK="https://devspaces.${CLUSTER_APPS_DOMAIN}/api/oauth/callback"

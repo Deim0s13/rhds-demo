@@ -1,8 +1,11 @@
 ---
 # PostgreSQL for GitLab. Chart 10.x removed the bundled database, so this is
-# now ours to run. Using the Red Hat PostgreSQL image because it is built for
-# OpenShift: it runs happily as an arbitrary UID, which is exactly the problem
-# the upstream community images have.
+# ours to run. Red Hat's image because it is built for OpenShift and runs
+# happily as an arbitrary UID, which is exactly what community images do not.
+#
+# GitLab 19.x warns that it wants PostgreSQL >= 17 and then proceeds anyway on
+# 16. It is a warning, not a block: migrations complete normally. rhel9/
+# postgresql-17 was not available in the catalogue when this was written.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -10,9 +13,7 @@ metadata:
   namespace: GITLAB_NAMESPACE_PLACEHOLDER
 type: Opaque
 stringData:
-  # The chart reads the GitLab user's password from a secret with this key.
   password: DB_PASSWORD_PLACEHOLDER
-  # Superuser, needed only to install extensions during bootstrap.
   postgresql-password: DB_ADMIN_PASSWORD_PLACEHOLDER
 ---
 apiVersion: v1
@@ -60,7 +61,7 @@ spec:
             - name: POSTGRESQL_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef: {name: gitlab-postgresql, key: postgresql-password}
-            # GitLab needs more connections than the image's default.
+            # GitLab opens more connections than the image's default allows.
             - name: POSTGRESQL_MAX_CONNECTIONS
               value: "300"
             - name: POSTGRESQL_SHARED_BUFFERS
@@ -85,9 +86,12 @@ spec:
           requests:
             storage: 20Gi
 ---
-# GitLab requires the pg_trgm and btree_gist extensions, which only a superuser
-# can install. The chart used to do this itself with the bundled database; with
-# an external one it is our job.
+# GitLab requires pg_trgm and btree_gist, which only a superuser can install.
+# The chart did this itself with the bundled database; with an external one it
+# is our job.
+#
+# NOTE: Jobs are immutable. up.sh deletes this before applying, because oc
+# apply silently keeps the old spec and a fixed Job appears to do nothing.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -95,6 +99,7 @@ metadata:
   namespace: GITLAB_NAMESPACE_PLACEHOLDER
 spec:
   backoffLimit: 10
+  activeDeadlineSeconds: 600
   ttlSecondsAfterFinished: 3600
   template:
     spec:

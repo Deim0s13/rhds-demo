@@ -5,9 +5,12 @@
 # pulls: the vLLM runtime is around 18GB, the ModelCar 6.4GB, and GitLab has a
 # dozen images of its own plus roughly 12 minutes of database migrations.
 #
-# Run it under tee. A wait this long will outlive a terminal restart, and losing
-# the output means losing the diagnosis:
-#   ./scripts/up.sh 2>&1 | tee up-$(date +%H%M).log
+# RUN PREFLIGHT FIRST. It checks in 30 seconds most of what would otherwise fail
+# 40 minutes in:
+#   ./scripts/preflight.sh && ./scripts/up.sh 2>&1 | tee up-$(date +%H%M).log
+#
+# Always pipe through tee. A wait this long outlives a terminal restart, and
+# losing the output means losing the diagnosis.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,6 +19,11 @@ source "${REPO_ROOT}/scripts/lib.sh"
 load_env
 require oc
 require_login
+
+# Recorded up front, not at the end. The sub-scripts up.sh calls (seed-gitlab.sh)
+# check this to catch a stray kube context switch, and they run before stage 6.
+# The point is which cluster we pointed at, not whether the run succeeded.
+record_cluster
 
 banner "1/6  Dev Spaces operator"
 render "${REPO_ROOT}/bootstrap/01-operator.yaml" | oc apply -f -
@@ -49,13 +57,13 @@ if [[ "${DEPLOY_GITLAB}" == "true" ]]; then
   #
   #   Order matters. The operator caches API discovery at startup, so a
   #   controller that starts before these CRDs exist never notices them.
-  #   Installing first avoids needing to restart it later.
+  #   Installing first avoids needing to restart it later. That cost a day.
   #
   # The Gateway API CRD rejections in the output are expected and harmless:
   # OpenShift's Ingress Operator owns those and refuses modification.
-  info "installing Envoy Gateway CRDs"
+  info "installing Envoy Gateway CRDs (${ENVOY_GATEWAY_VERSION})"
   oc apply --server-side \
-    -f https://github.com/envoyproxy/gateway/releases/download/v1.2.1/install.yaml \
+    -f "https://github.com/envoyproxy/gateway/releases/download/${ENVOY_GATEWAY_VERSION}/install.yaml" \
     2>/dev/null || true
   oc wait --for condition=established --timeout=180s \
     crd/envoyproxies.gateway.envoyproxy.io \
@@ -65,13 +73,26 @@ if [[ "${DEPLOY_GITLAB}" == "true" ]]; then
   render "${REPO_ROOT}/overlays/gitlab/01-operator.yaml" | oc apply -f -
   wait_for_csv "gitlab-operator" "${GITLAB_NAMESPACE}" 900
 
+  # The operator accepts only the chart versions it ships, and the list moves
+  # with each release. Discovered rather than pinned, because a pinned version
+  # goes stale and fails at admission on a future environment.
+  if [[ -z "${GITLAB_CHART_VERSION}" ]]; then
+    info "discovering supported chart version"
+    GITLAB_CHART_VERSION="$(discover_gitlab_chart_version)" \
+      || die "could not determine a supported chart version.
+    Set GITLAB_CHART_VERSION in demo.env explicitly. To see the list, apply a
+    GitLab CR with a bogus version and read the rejection."
+  fi
+  info "chart version: ${GITLAB_CHART_VERSION}"
+
   # Chart 10.x removed the bundled PostgreSQL, Redis and object storage, so
   # those are ours to run now. Closer to how a bank would deploy it anyway.
   info "deploying GitLab dependencies"
 
   # Jobs are immutable. oc apply silently keeps the old spec, so a fixed Job
   # appears not to have changed. Delete BEFORE applying, not after.
-  oc delete job gitlab-postgresql-extensions -n "${GITLAB_NAMESPACE}" --ignore-not-found --wait=true
+  oc delete job gitlab-postgresql-extensions -n "${GITLAB_NAMESPACE}" \
+    --ignore-not-found --wait=true
 
   render "${REPO_ROOT}/overlays/gitlab/00-postgres.yaml"  | oc apply -f -
   render "${REPO_ROOT}/overlays/gitlab/00-redis.yaml"     | oc apply -f -
@@ -159,11 +180,12 @@ case "${AI_BACKEND}" in
     render "${REPO_ROOT}/overlays/rhoai/01-inference-service.yaml" | oc apply -f -
     render "${REPO_ROOT}/overlays/rhoai/02-network-policy.yaml"    | oc apply -f -
     wait_for_inferenceservice "${AI_SERVICE_NAME}" "${DEMO_NAMESPACE}" 3600 \
-      || warn "model is not serving. Dev Spaces itself is fine, so acts 1 to 5 will
-    run normally. Fix the model, or set AI_BACKEND=ollama in demo.env and re-run."
+      || warn "model is not serving yet. Dev Spaces itself is fine, so acts 1 to 5
+    will run normally, and KServe may still bring it up on its own. Check with
+    oc get inferenceservice -n ${DEMO_NAMESPACE}, or set AI_BACKEND=ollama."
     ;;
   ollama)
-    render "${REPO_ROOT}/overlays/ollama/01-ollama.yaml"        | oc apply -f -
+    render "${REPO_ROOT}/overlays/ollama/01-ollama.yaml"         | oc apply -f -
     render "${REPO_ROOT}/overlays/ollama/02-network-policy.yaml" | oc apply -f -
     oc rollout status "deployment/${AI_SERVICE_NAME}" -n "${DEMO_NAMESPACE}" --timeout=600s
     info "pulling ${OLLAMA_MODEL}"
@@ -182,8 +204,6 @@ else
   info "skipped"
 fi
 
-record_cluster
-
 banner "6/6  Done"
 DASHBOARD="$(oc get checluster devspaces -n "${DEVSPACES_NAMESPACE}" -o jsonpath='{.status.cheURL}' 2>/dev/null || true)"
 cat <<EOF
@@ -195,6 +215,7 @@ cat <<EOF
   AI backend     : ${AI_BACKEND}
   Model          : ${AI_MODEL} (in-cluster only, no egress)
   Endpoint       : ${AI_BASE_URL:-none}
+  Chart version  : ${GITLAB_CHART_VERSION:-n/a}
 
   GitLab root password:
     oc get secret gitlab-gitlab-initial-root-password -n ${GITLAB_NAMESPACE} \\

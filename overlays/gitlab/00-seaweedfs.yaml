@@ -22,7 +22,8 @@ stringData:
   secretkey: S3_SECRET_KEY_PLACEHOLDER
 ---
 # SeaweedFS reads its S3 identities from a JSON config rather than from
-# environment variables the way MinIO did.
+# environment variables the way MinIO did. Without this it allows anonymous
+# access, which is worth verifying after deploy rather than assuming.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -47,8 +48,8 @@ stringData:
     }
 ---
 # The Rails side wants its S3 credentials as a YAML document under one key.
-# Note the key is "config", which is what GitLab's own examples use, not
-# "connection".
+# The key is "config", which is what GitLab's own examples use, not
+# "connection". Getting that wrong fails the chart render.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -134,6 +135,7 @@ spec:
         - name: seaweedfs
           # Pinned deliberately. An unpinned tag is what turned a vendor's
           # registry change into a broken rebuild on a five-day cluster.
+          # Verified to start under an arbitrary UID (1000670000:0).
           image: docker.io/chrislusf/seaweedfs:4.47
           # "server" runs master, volume, filer and the S3 gateway in one
           # process. Correct for a demo; a real deployment separates them.
@@ -150,8 +152,8 @@ spec:
             - containerPort: 8888
               name: filer
           resources:
-            requests: { cpu: 200m, memory: 512Mi }
-            limits: { cpu: "2", memory: 3Gi }
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {cpu: "2", memory: 3Gi}
           volumeMounts:
             - name: data
               mountPath: /data
@@ -161,7 +163,7 @@ spec:
           readinessProbe:
             # TCP rather than an HTTP path. SeaweedFS health endpoints differ
             # per component, and a wrong probe path is how the Redis rollout
-            # failed while the service itself was healthy.
+            # failed while the service itself was perfectly healthy.
             tcpSocket:
               port: 8333
             initialDelaySeconds: 15

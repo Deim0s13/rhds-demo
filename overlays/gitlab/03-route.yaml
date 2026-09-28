@@ -1,11 +1,12 @@
 ---
 # Ingress via an OpenShift Route with edge termination, using the cluster's
-# default wildcard certificate. The chart's own ingress is disabled.
+# default wildcard certificate. The chart's own ingress and Gateway API
+# resources are disabled in 02-gitlab.yaml.
 #
-# NOTE: Dev Spaces must trust this certificate to resolve devfiles. That is
-# what scripts/trust-cluster-ca.sh handles; without it you get a TLS error
-# when creating a workspace, and it looks like a GitLab problem rather than
-# a trust problem.
+# NOTE: Dev Spaces must trust this certificate to resolve devfiles over it.
+# scripts/trust-cluster-ca.sh handles that; without it you get a TLS error when
+# creating a workspace, and it reads like a GitLab problem rather than a trust
+# problem.
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:

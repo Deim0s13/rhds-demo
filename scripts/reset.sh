@@ -7,19 +7,21 @@ source "${REPO_ROOT}/scripts/lib.sh"
 load_env; require oc; require_login
 assert_provisioned_cluster
 
-banner "Deleting DevWorkspaces for $(oc whoami)"
-for ns in $(oc get devworkspace --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u); do
+banner "Deleting DevWorkspaces"
+for ns in $(oc get devworkspace --all-namespaces \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u); do
   info "clearing ${ns}"
   oc delete devworkspace --all -n "${ns}" --ignore-not-found
 done
 
-banner "Reverting the live-authored devfile"
-if [[ -f "${REPO_ROOT}/samples/bare-app/devfile.yaml" ]]; then
-  rm -f "${REPO_ROOT}/samples/bare-app/devfile.yaml"
-  info "removed samples/bare-app/devfile.yaml"
-  warn "if you committed and pushed it during the demo, revert that commit too"
+banner "Restoring ledger-service to its devfile-free state"
+if [[ "${DEPLOY_GITLAB}" == "true" ]]; then
+  # Act 5 authors and commits a devfile into ledger-service, so that repository
+  # is no longer devfile-free afterwards. seed-gitlab.sh force-pushes it back.
+  info "re-seeding from the working tree (force push)"
+  bash "${REPO_ROOT}/scripts/seed-gitlab.sh"
 else
-  info "bare-app is already clean"
+  warn "DEPLOY_GITLAB is false, nothing to re-seed"
 fi
 
 banner "Ready"

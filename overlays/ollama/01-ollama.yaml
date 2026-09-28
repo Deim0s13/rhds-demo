@@ -1,7 +1,7 @@
 ---
-# Internally hosted coding model. This is deliberately small so it runs on CPU
-# on a disposable cluster. The architectural point is not the model, it is that
-# inference stays inside the cluster boundary and no source code leaves it.
+# CPU fallback for the AI assistant. Works on any cluster, no GPU required.
+# The architectural point in act 6 is about WHERE inference happens, and that
+# survives intact on a smaller model.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -11,6 +11,8 @@ metadata:
     app: AI_SERVICE_NAME_PLACEHOLDER
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: AI_SERVICE_NAME_PLACEHOLDER
@@ -20,8 +22,8 @@ spec:
         app: AI_SERVICE_NAME_PLACEHOLDER
     spec:
       containers:
-        - name: AI_SERVICE_NAME_PLACEHOLDER
-          image: docker.io/ollama/ollama:latest
+        - name: ollama
+          image: docker.io/ollama/ollama:0.5.7
           ports:
             - containerPort: 11434
           env:
@@ -29,22 +31,16 @@ spec:
               value: "0.0.0.0:11434"
             - name: OLLAMA_MODELS
               value: /models
-            # Allow the Dev Spaces workspace origin to call the API.
             - name: OLLAMA_ORIGINS
               value: "*"
           resources:
-            requests:
-              cpu: "1"
-              memory: 4Gi
-            limits:
-              cpu: "4"
-              memory: 10Gi
+            requests: {cpu: "1", memory: 4Gi}
+            limits: {cpu: "4", memory: 10Gi}
           volumeMounts:
             - name: models
               mountPath: /models
           readinessProbe:
-            httpGet:
-              path: /
+            tcpSocket:
               port: 11434
             initialDelaySeconds: 10
             periodSeconds: 10

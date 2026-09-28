@@ -1,9 +1,13 @@
 ---
-# vLLM runtime image and args are discovered from the cluster's own
-# vllm-cuda-runtime-template by scripts/lib.sh::discover_vllm_image, and
-# substituted here. Do not pin a guessed image: a runtime that does not match
-# the installed RHOAI version fails deep inside vLLM startup, after a 9GB pull,
-# with an error that reads like a model problem rather than a version problem.
+# vLLM runtime image and args come from the cluster's own
+# vllm-cuda-runtime-template, discovered by scripts/lib.sh::discover_vllm_image
+# and substituted here.
+#
+# DO NOT PIN A GUESSED IMAGE. RHOAI ships runtime images matched to its version,
+# and a mismatched one fails deep inside vLLM startup AFTER an 18GB pull, with
+# an error that reads like a model problem rather than a version problem. The
+# digest also differs per environment: ba060ec1... on one cluster, c056e616...
+# on the next, three weeks apart. Discovery handles that; a pin would not.
 apiVersion: serving.kserve.io/v1alpha1
 kind: ServingRuntime
 metadata:
@@ -24,18 +28,18 @@ spec:
   containers:
     - name: kserve-container
       image: VLLM_IMAGE_PLACEHOLDER
-      # Deliberately minimal, matching the args Red Hat's own template ships.
-      # vLLM autodetects dtype and memory for a 3B model on a full GPU, and
-      # hand-tuned flags are the fastest way to break this across versions.
       args:
         - "--port=8080"
         - "--model=/mnt/models"
         - "--served-model-name=AI_MODEL_PLACEHOLDER"
         # Llama 3.2 advertises 131k context and vLLM v1 sizes the KV cache to
-        # serve one request at full length, which does not fit on a single GPU.
-        # Code completion sends a few hundred tokens of surrounding file, so 8k
-        # is generous. This is the arg to raise if you ever want longer prompts,
-        # and the first one to lower if you move to a smaller card.
+        # serve one request at full length, which needs 14.0 GiB against 13.41
+        # available and fails engine init. Code completion sends a few hundred
+        # tokens of surrounding file, so 8k is generous.
+        #
+        # This is also the honest answer to "how many developers can one GPU
+        # serve": the constraint is the KV cache, which scales with context
+        # length times concurrent requests, not the model weights.
         - "--max-model-len=8192"
         - "--gpu-memory-utilization=0.90"
       ports:
@@ -66,8 +70,8 @@ spec:
     minReplicas: 1
     maxReplicas: 1
     # One GPU means a rolling update can never complete: the new pod waits for
-    # a GPU the old pod is still holding, and sits Pending indefinitely while
-    # the old one serves happily. Recreate stops that dead.
+    # a GPU the old pod still holds and sits Pending indefinitely while the old
+    # one serves happily. Recreate stops that dead.
     deploymentStrategy:
       type: Recreate
     model:
@@ -76,7 +80,8 @@ spec:
       runtime: vllm-coder-runtime
       # ModelCar: weights shipped as an OCI image. On a five-day cluster this is
       # materially more reliable than pulling from object storage at startup,
-      # and it puts the model under the same registry controls as everything else.
+      # and it puts the model under the same registry controls as everything
+      # else. up.sh validates the reference before applying anything.
       storageUri: "AI_MODEL_IMAGE_PLACEHOLDER"
       resources:
         requests:

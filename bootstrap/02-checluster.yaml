@@ -15,8 +15,8 @@ spec:
       disableInternalRegistry: false
       externalDevfileRegistries: []
   devEnvironments:
-    # Cost control levers. Call these out live: this is the answer to
-    # "what stops 400 developers leaving workspaces running over the weekend".
+    # Cost control. Worth calling out live: this is the answer to "what stops
+    # four hundred developers leaving workspaces running over the weekend".
     secondsOfInactivityBeforeIdling: 1800
     secondsOfRunTimeoutBeforeIdling: 14400
     startTimeoutSeconds: 600
