@@ -10,20 +10,24 @@ metadata:
     - Spring Boot
     - Approved
 
-# No projects block. When a workspace is created from this repository's URL,
-# Dev Spaces clones that repository automatically. Declaring it again would be
-# redundant, and pinning a remote here is what ties a devfile to one SCM.
+# No projects block, and no subDir.
+#
+# Dev Spaces clones the repository the workspace was created from, so declaring
+# it again is redundant, and pinning a remote is what ties a devfile to one SCM.
+# This file therefore works unchanged against GitLab here and against a
+# customer's Bitbucket Data Center or GitHub Enterprise.
+#
+# subDir is NOT valid on a projects entry in schema 2.2.0 and fails validation.
 components:
   - name: tools
     container:
-      # In a bank this is your internally built, scanned image carrying the
-      # corporate CA bundle. Platform team owns it: one rebuild on a CVE,
-      # not four hundred laptops.
+      # The governance hinge. In a bank this is an internally built, scanned
+      # image carrying the corporate CA bundle. The platform team owns it, so a
+      # base image CVE is one rebuild rather than four hundred laptops.
       image: registry.access.redhat.com/ubi9/openjdk-21:latest
       # The UBI OpenJDK entrypoint expects to launch an application and exits
-      # when there is none. Kubernetes reads that as a crash and restarts it,
-      # so a workspace container needs something that just stays up. The
-      # ansible component already does this; the Java one was missing it.
+      # when there is none. Kubernetes reads a clean exit as a crash and
+      # restarts it, so a workspace container needs something that stays up.
       command: ["tail"]
       args: ["-f", "/dev/null"]
       memoryRequest: 1Gi
@@ -92,3 +96,45 @@ commands:
       group:
         kind: debug
         isDefault: true
+
+  # Points the Continue extension at the in-cluster model.
+  #
+  # WITHOUT THIS THE ENV VARS ABOVE ARE DECORATION. They were set for a long time
+  # with nothing reading them, so the only assistant in the workspace was
+  # whatever the developer already had signed in, which for most people is
+  # Copilot against their own account. That is the exact opposite of the point
+  # act 6 makes, and it is invisible until you look at where a completion went.
+  #
+  # Values come from the container environment at runtime rather than from the
+  # rendered placeholders, so there is one source of truth and an override to
+  # AI_BASE_URL takes effect without re-seeding.
+  - id: configure-ai
+    exec:
+      component: tools
+      commandLine: |
+        set -e
+        if [ -z "${AI_BASE_URL}" ]; then
+          echo "AI_BASE_URL is empty, skipping assistant configuration"
+          exit 0
+        fi
+        mkdir -p "${HOME}/.continue"
+        cat > "${HOME}/.continue/config.yaml" <<EOF
+        name: In-cluster model
+        version: 1.0.0
+        schema: v1
+        models:
+          - name: ${AI_MODEL}
+            provider: openai
+            model: ${AI_MODEL}
+            apiBase: ${AI_BASE_URL}
+            apiKey: ${AI_API_KEY}
+            roles:
+              - chat
+              - autocomplete
+              - edit
+        EOF
+        echo "assistant configured against ${AI_BASE_URL}"
+
+events:
+  postStart:
+    - configure-ai

@@ -1,0 +1,13 @@
+{
+  "//": [
+    "Dev Spaces installs these from Open VSX at workspace startup.",
+    "A WRONG ID FAILS SILENTLY, so verify each at",
+    "open-vsx.org/extension/<publisher>/<name> before adding it.",
+    "redhat.ansible is what gives the inline module docs and live linting that",
+    "act 6 demonstrates. Without it the act is just a CLI run."
+  ],
+  "recommendations": [
+    "Continue.continue",
+    "redhat.ansible"
+  ]
+}

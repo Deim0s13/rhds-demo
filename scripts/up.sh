@@ -74,8 +74,19 @@ if [[ "${DEPLOY_GITLAB}" == "true" ]]; then
   wait_for_csv "gitlab-operator" "${GITLAB_NAMESPACE}" 900
 
   # The operator accepts only the chart versions it ships, and the list moves
-  # with each release. Discovered rather than pinned, because a pinned version
-  # goes stale and fails at admission on a future environment.
+  # fast: 10.4.0 / 10.3.2 / 10.2.6 one day, 10.4.1 / 10.3.3 / 10.2.7 the next.
+  # So discover it, and ALSO validate anything configured, because a value left
+  # in demo.env from a previous environment is stale by definition and fails at
+  # admission 40 minutes into a bring-up.
+  if [[ -n "${GITLAB_CHART_VERSION}" ]]; then
+    info "validating configured chart version ${GITLAB_CHART_VERSION}"
+    if ! chart_version_accepted "${GITLAB_CHART_VERSION}"; then
+      warn "chart version ${GITLAB_CHART_VERSION} is not accepted by this operator."
+      warn "it is probably left over from a previous environment. Discovering instead."
+      warn "clear GITLAB_CHART_VERSION in demo.env to stop this happening again."
+      GITLAB_CHART_VERSION=""
+    fi
+  fi
   if [[ -z "${GITLAB_CHART_VERSION}" ]]; then
     info "discovering supported chart version"
     GITLAB_CHART_VERSION="$(discover_gitlab_chart_version)" \
@@ -163,7 +174,7 @@ case "${AI_BACKEND}" in
     # out it does not. Catalogue tags move, and a bad reference fails silently
     # in an init container rather than at apply time.
     info "checking ModelCar reference"
-    oc image info "${AI_MODEL_IMAGE#oci://}" >/dev/null 2>&1 \
+    image_resolves "${AI_MODEL_IMAGE#oci://}" \
       || die "cannot resolve ${AI_MODEL_IMAGE}
     The tag does not exist, or the registry is unreachable. List what is there:
       skopeo list-tags docker://quay.io/redhat-ai-services/modelcar-catalog | head -40"

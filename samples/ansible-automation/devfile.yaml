@@ -12,17 +12,24 @@ metadata:
 
 components:
   - name: tooling
-    # Ansible dev tools: ansible-core, ansible-lint, ansible-navigator,
-    # molecule and ansible-builder in one image. The platform team decides
-    # which tooling is present, not each individual laptop.
     container:
-      image: ghcr.io/ansible/community-ansible-dev-tools:latest
+      # Ansible dev tools: ansible-core, ansible-lint, ansible-navigator,
+      # molecule and ansible-builder in one image. The platform team decides
+      # which tooling is present, not each individual laptop. That is the point
+      # of this act: automation content deserves the same governed authoring
+      # loop as application code.
+      # Pinned. :latest moved under us between environments, which is the same
+      # class of problem as the MinIO story in act 3 and worth saying out loud.
+      # Confirm before an environment you care about:
+      #   oc image info ghcr.io/ansible/community-ansible-dev-tools:v26.9.0
+      image: ghcr.io/ansible/community-ansible-dev-tools:v26.9.0
+      command: ["tail"]
+      args: ["-f", "/dev/null"]
       memoryRequest: 1Gi
       memoryLimit: 8Gi
       cpuRequest: 500m
       cpuLimit: 2000m
       mountSources: true
-      args: ["tail", "-f", "/dev/null"]
       env:
         - name: ANSIBLE_CONFIG
           value: ${PROJECT_SOURCE}/ansible.cfg
@@ -60,3 +67,40 @@ commands:
       group:
         kind: run
         isDefault: true
+
+  # Points the Continue extension at the in-cluster model. Same rationale as in
+  # payments-service: without this the AI_* env vars above are decoration and the
+  # only assistant present is whatever the developer already had signed in.
+  #
+  # The component is "tooling" here, not "tools". Getting that wrong gives a
+  # devfile that validates and a command that never runs.
+  - id: configure-ai
+    exec:
+      component: tooling
+      commandLine: |
+        set -e
+        if [ -z "${AI_BASE_URL}" ]; then
+          echo "AI_BASE_URL is empty, skipping assistant configuration"
+          exit 0
+        fi
+        mkdir -p "${HOME}/.continue"
+        cat > "${HOME}/.continue/config.yaml" <<EOF
+        name: In-cluster model
+        version: 1.0.0
+        schema: v1
+        models:
+          - name: ${AI_MODEL}
+            provider: openai
+            model: ${AI_MODEL}
+            apiBase: ${AI_BASE_URL}
+            apiKey: ${AI_API_KEY}
+            roles:
+              - chat
+              - autocomplete
+              - edit
+        EOF
+        echo "assistant configured against ${AI_BASE_URL}"
+
+events:
+  postStart:
+    - configure-ai

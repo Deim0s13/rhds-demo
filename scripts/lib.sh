@@ -461,6 +461,44 @@ EOS
   echo "${ver}"
 }
 
+# Is this chart version one the operator will accept? Used to validate a value
+# left in demo.env, which on a new environment is stale more often than not.
+chart_version_accepted() {
+  local v="$1" out
+  out="$(oc apply --dry-run=server -f - 2>&1 <<EOS || true
+apiVersion: apps.gitlab.com/v1beta1
+kind: GitLab
+metadata:
+  name: chart-version-probe
+  namespace: ${GITLAB_NAMESPACE}
+spec:
+  chart:
+    version: "${v}"
+EOS
+)"
+  ! grep -q 'not supported' <<< "${out}"
+}
+
+# --- Images -----------------------------------------------------------------
+
+# Does this image reference resolve?
+#
+# ALWAYS GO THROUGH THIS, never bare `oc image info`. A multi-arch image is a
+# manifest list, and plain `oc image info` REFUSES one:
+#
+#   error: the image is a manifest list and contains multiple images
+#          - use --filter-by-os to select from: linux/amd64, linux/arm64
+#
+# That is a non-zero exit on a perfectly good image, which reads as a missing
+# tag. Harmless where the caller only warns; a false hard failure on the
+# ModelCar check, which is the one place this script stops a run.
+#
+# linux/amd64 is deliberate rather than a default: these clusters are amd64, so
+# an image published only for arm64 genuinely cannot run here and SHOULD fail.
+image_resolves() {
+  oc image info --filter-by-os=linux/amd64 "$1" >/dev/null 2>&1
+}
+
 # --- GPU --------------------------------------------------------------------
 
 # Free the GPU held by known, disposable RHDP sample workloads.

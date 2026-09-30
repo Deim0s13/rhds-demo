@@ -1,24 +1,24 @@
 # Choosing the AI Backend
 
-Act 6 needs a model. The workspace only ever needs an OpenAI-compatible base URL,
-so the backend is a variable in `demo.env`, not a fork of the demo.
+Act 6 needs a model. The workspace only ever needs an OpenAI-compatible base
+URL, so the backend is a variable in `demo.env`, not a fork of the demo.
 
 ## Which one, when
 
 |                    | `rhoai`                            | `ollama`                                |
 | ------------------ | ---------------------------------- | --------------------------------------- |
 | Environment needed | RHOAI with GPU                     | any OpenShift                           |
-| Adds to bootstrap  | ~10 to 20 min                      | ~5 min                                  |
-| Model              | 7B coder on GPU, genuinely good    | 1.5B on CPU, adequate                   |
+| Adds to bootstrap  | 15 to 25 min                       | about 5 min                             |
+| Model              | 3B on GPU, genuinely responsive    | 1.5B on CPU, adequate                   |
 | Best for           | risk, security, EA, platform teams | app developers, tight timings, fallback |
 
 **Default to `rhoai` when you have the environment and the room contains anyone
-who owns risk or architecture.** The reason is not the model quality. It is that
-an InferenceService served by a model serving team, consumed by a development
-team, is the actual enterprise shape. It gives you a genuine separation of
-concerns to point at in act 7: someone owns the model, someone owns serving,
-someone owns the workspace stack, and they are three different teams with three
-different approval paths.
+who owns risk or architecture.** The reason is not model quality. It is that an
+InferenceService served by a model serving team, consumed by a development team,
+is the actual enterprise shape. It gives you a genuine separation of concerns to
+point at in act 7: someone owns the model, someone owns serving, someone owns the
+workspace stack, and they are three different teams with three different approval
+paths.
 
 **Fall back to `ollama` without embarrassment.** If the GPU environment is late,
 if the InferenceService is still pulling weights twenty minutes before you start,
@@ -30,96 +30,114 @@ making about where inference happens does not depend on which backend serves it.
 ```bash
 # demo.env
 AI_BACKEND="rhoai"
-AI_MODEL="qwen2.5-coder-7b-instruct"
+AI_MODEL="llama-3.2-3b-instruct"
 AI_SERVICE_NAME="coder-model"
-AI_MODEL_IMAGE="oci://quay.io/redhat-ai-services/modelcar-catalog:<tag>"
+AI_MODEL_IMAGE="oci://quay.io/redhat-ai-services/modelcar-catalog:llama-3.2-3b-instruct"
+AI_RUNTIME_IMAGE=""     # leave empty: discovered from the cluster
 ```
+
+`preflight.sh` validates the ModelCar reference and resolves the runtime image
+before `up.sh` commits to anything.
+
+### Do not pin the runtime image
+
+RHOAI ships vLLM runtime images matched to its own version, and the digest
+differs between environments: `ba060ec1...` on one cluster, `c056e616...` three
+weeks later. `discover_vllm_image` reads it from the cluster's
+`vllm-cuda-runtime-template`.
+
+A pinned guess fails deep inside vLLM startup, _after_ an 18GB pull, with a
+tokeniser attribute error that reads like a model problem rather than a version
+problem. That cost most of a day.
+
+### Confirm the ModelCar tag
+
+The other thing most likely to bite. Catalogue tags move, and a bad reference
+does not fail at `oc apply`; it fails minutes later in an init container.
 
 ```bash
-./scripts/up.sh
-./scripts/render-devfiles.sh    # then commit and push, see below
-./scripts/smoke.sh
+oc image info --filter-by-os=linux/amd64 \
+  quay.io/redhat-ai-services/modelcar-catalog:<tag>
 ```
 
-### Confirm the ModelCar tag first
-
-This is the single most likely thing to bite you. Catalogue tags move, and a bad
-reference does not fail at `oc apply`, it fails minutes later when the
-InferenceService tries to start.
-
-```bash
-oc image info quay.io/redhat-ai-services/modelcar-catalog:<tag>
-```
+`--filter-by-os` is not optional. Without it, a multi-arch image makes
+`oc image info` exit non-zero with "the image is a manifest list", which reads
+exactly like a missing tag. The scripts go through `image_resolves` in `lib.sh`
+for this reason.
 
 If your environment has an internal mirror, point `AI_MODEL_IMAGE` at that. In a
-bank this is the only acceptable answer anyway, and it is worth saying so live:
+bank that is the only acceptable answer anyway, and it is worth saying live:
 model weights are a supply chain artefact and belong under the same registry
-controls as your base images. That connects neatly to the point you already made
-in act 3 about scanned internal images.
+controls as your base images. That connects straight back to the act 3 point.
 
 ### The GPU is probably already in use
 
-RHOAI environments are commonly provisioned with a sample model already being
-served. It holds the GPU, so your InferenceService will sit Pending and the
-cause is not obvious from its status.
+RHOAI environments commonly arrive with a sample model already served, holding
+the GPU. `up.sh` deletes namespaces on the `RHDP_SAMPLE_NAMESPACES` allow-list,
+and only those, when they actually hold a GPU. Anything else gets a warning and
+is left alone, so the script stays safe on a shared cluster.
 
-`up.sh` handles the common case automatically. It looks for pods requesting a
-GPU outside the demo namespace, and deletes the holding namespace **only** if it
-appears in `RHDP_SAMPLE_NAMESPACES` in `demo.env`. Anything not on that list
-produces a warning and is left alone.
+`./scripts/gpu-claims.sh` is read-only and shows what is holding what. Set
+`FREE_GPU="false"` on any cluster you did not personally provision.
 
-That asymmetry is deliberate. The script has to stay safe to run on a shared or
-customer cluster, so it will only remove things we know are disposable RHDP
-scaffolding. `my-first-model` is the one that ships with the standard template;
-add others as you meet them.
+Allow a minute after scaling something down: the pod must terminate before the
+device plugin releases the GPU, and the scheduler will not place your predictor
+until it does. Do not conclude something else is broken in that window.
 
-Two escape hatches:
+### Why `--max-model-len=8192`
 
-- `FREE_GPU="false"` in `demo.env` warns and never deletes anything. Use this on
-  any cluster you did not personally provision.
-- `./scripts/gpu-claims.sh` is read-only. It lists every GPU holder, including
-  notebooks and InferenceServices, with the commands to scale each down. Run it
-  first if you want to see what you are dealing with before `up.sh` touches it.
+Llama 3.2 advertises 131k context. vLLM v1 sizes the KV cache to serve one
+request at full length, needs 14.0 GiB, and finds 13.41 available, so engine
+initialisation fails. Code completion sends a few hundred tokens of surrounding
+file, so 8k is generous.
 
-The checks measure free GPUs rather than total GPUs, so a claimed GPU surfaces
-before you have waited fifteen minutes for a model pull rather than after.
+This is also the honest answer to "how many developers can one GPU serve". The
+constraint is the KV cache, which scales with context length times concurrent
+requests, not the model weights. Offer to size it properly with their numbers
+rather than inventing a figure in the room.
 
-Allow a minute after scaling down. The pod has to terminate before the device
-plugin releases the GPU, and the scheduler will not place your predictor until
-it does. Do not conclude something else is broken during that window.
+## How the workspace actually reaches the model
 
-### Devfiles have to be pushed
+Two pieces, and both must be present. Setting `AI_BASE_URL` alone does nothing.
 
-`render-devfiles.sh` writes the endpoint into the committed devfiles. Dev Spaces
-fetches those from Git, so an unpushed change means the workspace silently uses
-the old endpoint and the assistant times out in front of the customer.
-`smoke.sh` checks for this drift; do not ignore that check.
+1. `.vscode/extensions.json` lists `Continue.continue`, which Dev Spaces installs
+   from Open VSX at workspace startup.
+2. The `configure-ai` command runs on `postStart` and writes
+   `~/.continue/config.yaml` from `AI_BASE_URL`, `AI_MODEL` and `AI_API_KEY` in
+   the container environment.
 
-## What to actually show in act 6
+Reading the values from the environment at runtime rather than from rendered
+placeholders keeps one source of truth, so overriding `AI_BASE_URL` takes effect
+without re-seeding.
 
-Six minutes, shared with the Ansible segment. Do not turn this into an RHOAI demo.
+`smoke.sh` checks for both. Without them the workspace has whatever assistant the
+developer already had signed in, which is usually Copilot against their own
+account, and the demo argues against itself without any visible sign of it.
+
+**Extension ids fail silently when wrong.** No extension, no error. Verify any id
+at `open-vsx.org/extension/<publisher>/<name>` before adding it.
+
+**Open VSX is reached over the internet by default.** Concede this before it is
+pointed out: in a bank the answer is a private Open VSX registry, curated the same
+way base images are. Same argument as act 3, one layer up.
+
+## What to show in act 6
+
+Seven minutes, shared with Ansible and the OAuth handshake. Do not turn this into
+an RHOAI demo.
 
 1. Trigger a completion in the IDE. Ten seconds, no narration needed.
-2. `oc get inferenceservice -n <demo namespace>`. The model is a workload in this
+2. `oc get inferenceservice -n devspaces-demo`. The model is a workload in this
    cluster, with a URL, a replica count and a GPU request.
 3. `oc get networkpolicy`. Developer workspaces can reach it. Nothing else can.
 
 **The line that lands:** on a laptop, "developers must only use the approved
 assistant" is a policy you are trusting people to follow. Here it is an
 environment variable in a devfile the platform team owns, pointed at an endpoint
-that only workspaces can reach, running on hardware you control. You have turned
-a policy statement into a configuration fact.
+only workspaces can reach, running on hardware you control. You have turned a
+policy statement into a configuration fact.
 
-Expect the follow-up question about prompt logging, retention and whether
-completions are auditable. That is a good outcome. The honest answer is that
-serving gives you a place to put that control, and what gets logged is a decision
-their model serving team makes, not something Dev Spaces decides for them.
-
-## GPU capacity, said out loud
-
-One GPU serves this demo. It does not serve four hundred developers. If they ask
-about scaling, do not guess in the room. The shape of the answer is that
-concurrency depends on model size, context length and request pattern, that
-KServe will scale replicas against available GPUs, and that it is a sizing
-exercise worth doing properly with their numbers. Offering to take that away is
-a better outcome than an invented figure.
+Expect a follow-up about prompt logging, retention and whether completions are
+auditable. That is a good outcome. The honest answer is that serving gives you a
+place to put that control, and what gets logged is a decision their model serving
+team makes, not something Dev Spaces decides for them.

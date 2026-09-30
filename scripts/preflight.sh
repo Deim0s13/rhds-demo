@@ -68,6 +68,8 @@ lib.sh|refusing to apply|render placeholder guard
 lib.sh|but their value is empty|render empty-value guard
 lib.sh|discover_vllm_image|vLLM runtime discovery
 lib.sh|discover_gitlab_chart_version|chart version discovery
+lib.sh|chart_version_accepted|chart version validation
+lib.sh|filter-by-os|manifest-list safe image resolution
 lib.sh|load_or_generate_secrets|credentials kept outside the repo
 lib.sh|free_gpu_if_safe|GPU allow-list handling
 up.sh|server-side|Envoy CRD server-side apply
@@ -89,6 +91,21 @@ if [[ -f "${REPO_ROOT}/overlays/gitlab/00-minio.yaml" ]]; then
   bad "overlays/gitlab/00-minio.yaml still present. MinIO's registries are gated; delete it"
 else
   ok "no stale MinIO manifest"
+fi
+
+# The prepull DaemonSet exists to warm the exact image the workspace will use.
+# If the two drift, the prepull succeeds, preflight stays green, and act 6 pulls
+# a multi-gigabyte image cold in front of the room. Nothing else catches this.
+adt_devfile="$(grep -o 'community-ansible-dev-tools:[^ ]*' \
+  "${REPO_ROOT}/samples/ansible-automation/devfile.yaml" 2>/dev/null | head -1)"
+adt_prepull="$(grep -o 'community-ansible-dev-tools:[^ ]*' \
+  "${REPO_ROOT}/bootstrap/06-image-prepull.yaml" 2>/dev/null | head -1)"
+if [[ -z "${adt_devfile}" || -z "${adt_prepull}" ]]; then
+  bad "could not find the ansible dev tools image in both the devfile and the prepull"
+elif [[ "${adt_devfile}" != "${adt_prepull}" ]]; then
+  bad "ansible image mismatch: devfile ${adt_devfile}, prepull ${adt_prepull}"
+else
+  ok "ansible image consistent: ${adt_devfile}"
 fi
 
 banner "Manifests parse"
@@ -170,26 +187,51 @@ while IFS= read -r m; do
 done < <(find "${REPO_ROOT}/bootstrap" "${REPO_ROOT}/overlays" -name '*.yaml' 2>/dev/null | sort)
 
 banner "External images"
-# Every third-party reference resolved now rather than on a node at pull time.
-# MinIO gating their registries overnight is precisely what this catches.
+# WARNINGS, NOT FAILURES, and this distinction matters.
+#
+# oc image info runs from YOUR LAPTOP, not the cluster. Your local client
+# usually has no registry credentials, so registry.redhat.io,
+# registry.access.redhat.com, docker.io and ghcr.io all report "unauthorized"
+# even for images the cluster pulls perfectly well with its own pull secret.
+# quay.io tends to answer anonymously, which is why it looks inconsistent.
+#
+# Treating these as hard failures produced seven bogus errors on a healthy
+# cluster, which is the fastest way to teach someone to ignore preflight.
+#
+# To make this authoritative for the Red Hat registries:
+#   oc registry login --registry registry.redhat.io
+# Or check from the cluster itself, which is what actually matters:
+#   oc run imgcheck --restart=Never --image=<ref> -- sleep 10
+#   oc get pod imgcheck    # ImagePullBackOff means genuinely unreachable
 IMAGES="$(find "${REPO_ROOT}/bootstrap" "${REPO_ROOT}/overlays" -name '*.yaml' -exec \
   grep -h '^[[:space:]]*image:' {} \; 2>/dev/null \
   | sed 's/.*image:[[:space:]]*//' | tr -d '"' | grep -v PLACEHOLDER | sort -u)"
 if [[ -z "${IMAGES}" ]]; then
   soft "no static image references found"
 else
+  unresolved=0
   while IFS= read -r img; do
     [[ -z "${img}" ]] && continue
-    if oc image info "${img}" >/dev/null 2>&1; then
+    if image_resolves "${img}"; then
       ok "${img}"
     else
-      bad "cannot resolve ${img}"
+      soft "could not resolve ${img} from here (likely a local credential gap)"
+      unresolved=$((unresolved+1))
     fi
   done <<< "${IMAGES}"
+  if (( unresolved > 0 )); then
+    soft ""
+    soft "${unresolved} image(s) unresolved from this client. That is usually a"
+    soft "missing local pull secret, not a missing image. The cluster has its own."
+    soft "If a pod later reports ImagePullBackOff, THAT is the real signal."
+  fi
 fi
 
 if [[ "${AI_BACKEND}" == "rhoai" ]]; then
-  if oc image info "${AI_MODEL_IMAGE#oci://}" >/dev/null 2>&1; then
+  # This one IS a hard failure. The ModelCar catalogue is on quay.io, which
+  # answers anonymously, so a failure here is genuinely a moved tag, and a
+  # moved tag fails minutes later in an init container rather than at apply.
+  if image_resolves "${AI_MODEL_IMAGE#oci://}"; then
     ok "ModelCar ${AI_MODEL_IMAGE#oci://}"
   else
     bad "cannot resolve ModelCar ${AI_MODEL_IMAGE}. Catalogue tags move."
@@ -197,15 +239,26 @@ if [[ "${AI_BACKEND}" == "rhoai" ]]; then
 fi
 
 banner "Unpinned references"
-# A :latest tag makes a rebuild non-deterministic. It is how a working demo
-# becomes a broken one overnight with no change in the repo.
-LATEST="$(find "${REPO_ROOT}/bootstrap" "${REPO_ROOT}/overlays" -name '*.yaml' -exec \
-  grep -Hn 'image:.*:latest' {} \; 2>/dev/null || true)"
-if [[ -z "${LATEST}" ]]; then
-  ok "no :latest image tags"
-else
-  while IFS= read -r l; do soft "unpinned: ${l#"${REPO_ROOT}"/}"; done <<< "${LATEST}"
-fi
+# Not all :latest tags are equal.
+#
+# registry.redhat.io/rhel9/postgresql-16:latest and ubi9/openjdk-21:latest
+# already pin the MAJOR version in the repository name. Red Hat rebuilds those
+# for CVEs, and taking the rebuild is what you want: it is the same argument
+# act 3 makes about patched base images. Leaving these floating is deliberate.
+#
+# A community image with no version in its name is a different matter. That can
+# change behaviour overnight with nothing in the repo changing, which is how
+# MinIO broke this demo.
+while IFS= read -r l; do
+  [[ -z "${l}" ]] && continue
+  rel="${l#"${REPO_ROOT}"/}"
+  if grep -qE 'redhat\.(io|com)/(rhel9|ubi9)/[a-z]+-?[0-9]+:latest|ubi9/ubi-minimal:latest' <<< "${l}"; then
+    ok "floating by design (Red Hat, major version pinned in the name): ${rel##*/}"
+  else
+    soft "genuinely unpinned, consider a version: ${rel}"
+  fi
+done < <(find "${REPO_ROOT}/bootstrap" "${REPO_ROOT}/overlays" -name '*.yaml' -exec \
+  grep -Hn 'image:.*:latest' {} \; 2>/dev/null || true)
 
 if [[ "${DEPLOY_GITLAB}" == "true" ]]; then
   banner "GitLab prerequisites"

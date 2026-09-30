@@ -66,6 +66,18 @@ if [[ "${DEPLOY_GITLAB}" == "true" ]]; then
   check "payments devfile is rendered" \
     "curl -sk https://${GITLAB_HOST}/${GITLAB_GROUP}/payments-service/-/raw/main/devfile.yaml | grep -q 'AI_BASE_URL' && ! curl -sk https://${GITLAB_HOST}/${GITLAB_GROUP}/payments-service/-/raw/main/devfile.yaml | grep -q 'PLACEHOLDER'"
 
+  # The assistant has to be BOTH installed and pointed at the cluster model.
+  # Setting AI_BASE_URL and stopping there leaves the workspace with whatever
+  # assistant the developer already had signed in, usually Copilot against their
+  # own account, which is the exact opposite of the point act 6 makes. It is
+  # invisible unless you check where a completion actually went.
+  for r in payments-service ansible-automation; do
+    check "${r} installs the assistant extension" \
+      "curl -sk https://${GITLAB_HOST}/${GITLAB_GROUP}/${r}/-/raw/main/.vscode/extensions.json | grep -q 'Continue.continue'"
+    check "${r} configures it on postStart" \
+      "curl -sk https://${GITLAB_HOST}/${GITLAB_GROUP}/${r}/-/raw/main/devfile.yaml | grep -q 'configure-ai'"
+  done
+
   banner "Dev Spaces SCM wiring"
   # Without these, Dev Spaces cannot resolve a devfile from GitLab and falls back
   # to offering a default one, which then fails to start. That failure reads as a
@@ -103,8 +115,14 @@ banner "Manual steps you still have to do yourself"
 cat <<'MSG'
     1. Create a workspace from the payments-service URL and complete the GitLab
        OAuth handshake. It happens once per user; do not do it on stage.
-    2. Connect desktop VS Code to it once, and your JetBrains client once. Both
-       need prior pairing or you will be doing OAuth in front of the customer.
+    2. Create TWO MORE workspaces from the payments URL, one with the
+       "Visual Studio Code (desktop) (SSH)" editor and one with a JetBrains
+       editor, and connect your local clients to them.
+
+       The editor is chosen when the workspace is created and CANNOT be attached
+       to a running browser workspace, so act 4 is three workspaces rather than
+       one. JetBrains Gateway also needs a paid licence. See act 4 in
+       docs/PRESENTER-SCRIPT.md before you rehearse it.
     3. Confirm the AI assistant returns a completion in the browser IDE.
     4. Run scripts/reset.sh after rehearsing, so ledger-service goes back to
        being devfile-free for act 5.

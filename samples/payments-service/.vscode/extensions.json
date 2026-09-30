@@ -1,0 +1,15 @@
+{
+  "//": [
+    "Dev Spaces installs these from Open VSX at workspace startup.",
+    "Ids are publisher.name exactly as at open-vsx.org/extension/<pub>/<name>.",
+    "A WRONG ID FAILS SILENTLY: no extension, no error, and act 6 has no",
+    "assistant in it. Verify any id you add by opening that URL.",
+    "Continue is configured against the in-cluster model by the configure-ai",
+    "command in devfile.yaml, which runs on postStart."
+  ],
+  "recommendations": [
+    "Continue.continue",
+    "redhat.java",
+    "vscjava.vscode-maven"
+  ]
+}
