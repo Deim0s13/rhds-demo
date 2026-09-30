@@ -79,6 +79,7 @@ up.sh|control-plane=controller-manager|operator cache refresh
 up.sh|creating object storage buckets|bucket exec loop (not the hanging Job)
 seed-gitlab.sh|timeout 240|bounded token mint
 seed-gitlab.sh|GITLAB_TOKEN|token override
+seed-gitlab.sh|protected_branches|unprotect main before force push
 ROWS
 
 # The Job version of bucket creation hangs indefinitely. Assert it is gone.

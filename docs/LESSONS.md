@@ -209,6 +209,27 @@ and the failure looks like a GitLab problem. `trust-cluster-ca.sh`.
 take minutes. An unbounded `oc exec` hung `seed-gitlab.sh`, which hung `up.sh`,
 producing no output at all. Now bounded at 240s with a clear fallback.
 
+**Deleting a workspace does not discard its files.** Dev Spaces keeps `/projects`
+on a per-user PVC that outlives the workspace, and Che skips cloning when the
+project directory already exists. So a workspace recreated against an updated
+repository can come up with the old clone: the old devfile, and no
+`.vscode/extensions.json` if you just added one. Nothing looks wrong, the change
+is simply not there.
+
+`reset.sh` now deletes the per-user PVCs as well, after waiting for the workspace
+pods to terminate, because the PVC delete hangs on its finalizer rather than
+failing while a pod still mounts it.
+
+**A re-seed fails precisely because the first seed worked.** GitLab protects the
+default branch as soon as it exists, and `seed-gitlab.sh` force-pushes so the
+repositories always match the working tree. First seed: fine. Every one after:
+`You are not allowed to force push code to a protected branch`.
+
+`seed-gitlab.sh` now unprotects `main` via
+`DELETE /projects/:id/protected_branches/main` before pushing, swallowing the 404
+that a first seed returns. Worth knowing that this class of bug only appears on
+the second run, which is exactly the run nobody tests.
+
 ## Operational
 
 **Rotating credentials means clearing state.** PostgreSQL and object storage set

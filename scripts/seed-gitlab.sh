@@ -118,6 +118,27 @@ publish() {
     -d "{\"name\":\"${name}\",\"path\":\"${name}\",\"namespace_id\":${GROUP_ID},\"visibility\":\"public\",\"initialize_with_readme\":false}" \
     >/dev/null 2>&1 || info "  project exists already"
 
+  # Unprotect main before pushing.
+  #
+  # THIS IS WHY A RE-SEED FAILS WHEN THE FIRST SEED SUCCEEDED. GitLab protects
+  # the default branch as soon as it exists, and this script force-pushes so the
+  # repositories always match the working tree. So the first seed works, and
+  # every one after it dies on:
+  #
+  #   remote: GitLab: You are not allowed to force push code to a protected
+  #   branch on this project.
+  #
+  # Idempotent: a 404 when the branch is not protected is the expected answer on
+  # a first seed, so the failure is swallowed deliberately.
+  #
+  # Unprotected main is correct for a DEMO repository and wrong for a real one.
+  # If it comes up in the room, that is a good question with a good answer: in
+  # their bank main is protected and a change to an approved stack arrives as a
+  # merge request, which is the act 5 argument rather than a contradiction of it.
+  "${CURL[@]}" "${AUTH[@]}" -X DELETE \
+    "${API}/projects/${GITLAB_GROUP}%2F${name}/protected_branches/main" \
+    >/dev/null 2>&1 || true
+
   rm -rf "${WORK:?}/${name}"
   cp -r "${src}" "${WORK}/${name}"
   cd "${WORK}/${name}"
